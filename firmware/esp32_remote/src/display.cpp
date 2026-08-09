@@ -262,9 +262,13 @@ void initDisplay() {
 
     // Portrait rotation.
     writeCommand(0x36);
-    writeData(0xC0);
+    writeData(0xC8);
 
     writeCommand(0x13);
+    delay(10);
+
+    // Display inversion OFF
+    writeCommand(0x21);
     delay(10);
 
     writeCommand(0x29);
@@ -282,58 +286,5 @@ void displayStatus(
     const String &ipAddress,
     const String &otaStatus
 ) {
-    fillScreen(COLOR_BLACK);
-
-    // Header
-    fillRect(0, 0, SCREEN_W, 36, COLOR_BLUE);
-
-    // Simple visual blocks for now
-    fillRect(
-        12,
-        52,
-        wifiConnected ? 110 : 70,
-        28,
-        wifiConnected ? COLOR_GREEN : COLOR_RED
-    );
-
-    fillRect(
-        12,
-        96,
-        200,
-        22,
-        COLOR_GRAY
-    );
-
-    fillRect(
-        12,
-        136,
-        280,
-        22,
-        COLOR_GRAY
-    );
-
-    // For now, draw numeric portions only.
-    drawText(
-        18,
-        15,
-        String(RemoteConfig::FIRMWARE_VERSION),
-        COLOR_WHITE,
-        2
-    );
-
-    drawText(
-        18,
-        102,
-        ipAddress,
-        COLOR_WHITE,
-        1
-    );
-
-    drawText(
-        18,
-        142,
-        otaStatus,
-        COLOR_WHITE,
-        1
-    );
+    fillScreen(0x0000);   // BLACK
 }
