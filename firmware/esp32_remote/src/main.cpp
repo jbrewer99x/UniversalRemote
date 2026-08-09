@@ -4,11 +4,22 @@
 #include "config.h"
 #include "ota_client.h"
 #include "secrets.h"
+#include "display.h"
 
 Preferences prefs;
 bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastUpdateCheck = 0;
+
+#define LCD_DC   41
+#define LCD_CS   42
+#define LCD_SCK  40
+#define LCD_MOSI 45
+#define LCD_RST  39
+#define LCD_BL   5
+
+
+
 
 bool connectWifi() {
     if (WiFi.status() == WL_CONNECTED) return true;
@@ -45,6 +56,8 @@ void printInfo() {
     Serial.printf("TrueNAS: %s\n", REMOTE_SERVER_URL);
 }
 
+
+
 void checkUpdate(bool install) {
     auto result = OtaClient::check(install);
     Serial.print("OTA: ");
@@ -72,15 +85,26 @@ void serialConsole() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\nUniversal Remote ESP32 Bootstrap 0.1.0");
+    Serial.printf(
+    "\nUniversal Remote ESP32 Bootstrap %s\n",
+    RemoteConfig::FIRMWARE_VERSION
+);
     Serial.println("Target: Waveshare ESP32-S3-Touch-LCD-2.8");
-
+    initDisplay();
     prefs.begin("remote", false);
     autoUpdate = prefs.getBool("auto_update", RemoteConfig::DEFAULT_AUTO_UPDATE);
 
     OtaClient::begin();
     connectWifi();
     printInfo();
+
+    displayStatus(
+    WiFi.status() == WL_CONNECTED,
+    WiFi.status() == WL_CONNECTED
+        ? WiFi.localIP().toString()
+        : "0.0.0.0",
+    "OTA OK"
+    );
 
     // Wait 60 seconds before the first automatic update.
     lastUpdateCheck = millis();

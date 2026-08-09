@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # Recommended container mapping:
 #   /mnt/App/UniversalRemote/Firmware:/data/firmware
 #
-FIRMWARE_DIR = Path(os.getenv("FIRMWARE_DIR", "/data/firmware"))
+FIRMWARE_DIR = Path(os.getenv("FIRMWARE_DIR", "/app/Firmware"))
 FIRMWARE_FILE = os.getenv("FIRMWARE_FILE", "universal-remote.bin")
 FIRMWARE_VERSION_FILE = os.getenv("FIRMWARE_VERSION_FILE", "version.txt")
 

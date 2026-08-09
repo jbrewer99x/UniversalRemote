@@ -140,7 +140,7 @@ bool install(const String& url, size_t expectedSize, const String& expectedHash,
     }
 
     if (!Update.end(true)) {
-        error = "OTA finalize failed: " + Update.errorString();
+        error = String("OTA finalize failed: ") + Update.errorString();
         return false;
     }
     return true;

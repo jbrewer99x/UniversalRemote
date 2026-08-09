@@ -4,3 +4,6 @@ include/secrets.h
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
+
+factory-backup.bin
+backup-hash.txt
