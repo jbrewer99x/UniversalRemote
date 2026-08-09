@@ -1,0 +1,16 @@
+/* Single Play/Pause media control */
+.mediaGridSingle {
+    grid-template-columns: 1fr;
+}
+
+.mediaPlayPause {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.playPauseIcon {
+    font-size: 1.55rem;
+    line-height: 1;
+    letter-spacing: 0.08em;
+}

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Universal Remote</title>
+    <link rel="stylesheet" href="/static/remote.css">
+</head>
+<body>
+<header>
+    <h1>Universal Remote</h1>
+    <div id="status">Connecting...</div>
+</header>
+
+<main>
+    <section id="device-card" class="card">
+        <h2>Device</h2>
+        <div class="metric">
+            <span>Selected Device</span>
+            <select id="deviceSelect" aria-label="Select device"></select>
+        </div>
+        <div class="metric"><span>Connection</span><span id="onlineStatus">--</span></div>
+        <div class="metric"><span>Power State</span><span id="powerStatus">--</span></div>
+        <div class="metric"><span>Current Input</span><span id="inputStatus">--</span></div>
+        <div class="metric"><span>Volume</span><span id="volumeStatus">--</span></div>
+        <button id="connectButton" class="actionButton fullWidth">Pair / Connect</button>
+    </section>
+
+    <section id="input-card" class="card" hidden>
+        <h2>Inputs</h2>
+        <div id="inputTabs" class="inputGrid"></div>
+    </section>
+
+    <section id="navigation-card" class="card">
+        <h2>Navigation</h2>
+        <div class="remoteGrid utilityGrid">
+            <button class="remoteButton powerButton" data-command="power">Power</button>
+            <button class="remoteButton" data-command="home">Home</button>
+            <button class="remoteButton" data-command="back">Back</button>
+        </div>
+
+        <h3>Direction Pad</h3>
+        <div class="dpad">
+            <span></span><button class="remoteButton dpadButton" data-command="up">▲</button><span></span>
+            <button class="remoteButton dpadButton" data-command="left">◀</button>
+            <button class="remoteButton dpadButton okButton" data-command="ok">OK</button>
+            <button class="remoteButton dpadButton" data-command="right">▶</button>
+            <span></span><button class="remoteButton dpadButton" data-command="down">▼</button><span></span>
+        </div>
+    </section>
+
+    <section id="media-card" class="card">
+        <h2>Media</h2>
+        <div class="remoteGrid mediaTransportGrid">
+            <button class="remoteButton mediaTransportButton" data-command="previous" aria-label="Previous">⏮</button>
+            <button class="remoteButton mediaPlayPause" data-command="play_pause" aria-label="Play or pause">▶❚❚</button>
+            <button class="remoteButton mediaTransportButton" data-command="next" aria-label="Next">⏭</button>
+        </div>
+
+        <h3>Audio</h3>
+        <div class="remoteGrid volumeGrid">
+            <button class="remoteButton" data-command="volume_down">Volume −</button>
+            <button class="remoteButton" data-command="mute">Mute</button>
+            <button class="remoteButton" data-command="volume_up">Volume +</button>
+        </div>
+    </section>
+
+    <section id="system-card" class="card">
+        <h2>System</h2>
+        <div class="metric"><span>Last Command</span><span id="message">Ready</span></div>
+        <div class="metric"><span>Refresh</span><span>5 seconds</span></div>
+    </section>
+</main>
+
+<script src="/static/remote.js"></script>
+</body>
+</html>

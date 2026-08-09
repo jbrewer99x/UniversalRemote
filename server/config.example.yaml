@@ -1,0 +1,33 @@
+server:
+  name: Universal Remote
+
+devices:
+  office_lg:
+    type: lg_webos
+    name: Office LG TV
+    host: 10.0.0.20
+    without_ssl: true
+    key_file: data/lg_pairing.sqlite
+    mac: ""
+
+  roku:
+    type: roku
+    name: Roku
+    host: 10.0.0.21
+    port: 8060
+    timeout: 3
+
+  receiver:
+    type: onkyo
+    name: Onkyo Receiver
+    host: 10.0.0.26
+    port: 60128
+    timeout: 3
+
+  pc:
+    type: bazzite
+    name: PC
+    host: 10.0.0.22
+    port: 8765
+    scheme: http
+    timeout: 3

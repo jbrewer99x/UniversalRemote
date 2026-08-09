@@ -1,0 +1,177 @@
+:root {
+    color-scheme: dark;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #11161c;
+    color: #e8edf2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: #11161c; color: #e8edf2; }
+body { min-height: 100dvh; }
+header {
+    padding: 16px 20px;
+    background: #18212b;
+    border-bottom: 1px solid #2b3947;
+}
+h1 { margin: 0; font-size: 1.35rem; }
+#status { margin-top: 4px; color: #9cacba; font-size: .9rem; }
+
+main {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    padding: 14px;
+}
+.card {
+    width: 100%;
+    background: #18212b;
+    border: 1px solid #2b3947;
+    border-radius: 12px;
+    padding: 16px;
+}
+.card[hidden] { display: none !important; }
+h2 { margin: 0 0 12px; font-size: 1.05rem; }
+h3 { margin: 16px 0 9px; color: #c6d1dc; font-size: .92rem; }
+
+.metric {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; padding: 7px 0; border-bottom: 1px solid #263442;
+}
+.metric:last-child { border-bottom: 0; }
+.metric span:first-child { color: #9cacba; }
+.metric span:last-child { font-weight: 600; text-align: right; }
+
+select {
+    min-width: 160px; max-width: 60%; padding: 8px 10px;
+    color: #e8edf2; background: #121a22;
+    border: 1px solid #263442; border-radius: 8px;
+}
+button { font: inherit; }
+.actionButton, .remoteButton, .inputButton {
+    color: #e8edf2; background: #121a22;
+    border: 1px solid #263442; border-radius: 9px; cursor: pointer;
+}
+.actionButton:hover, .remoteButton:hover, .inputButton:hover {
+    background: #1b2732; border-color: #3a4c5e;
+}
+.actionButton:active, .remoteButton:active, .inputButton:active { transform: translateY(1px); }
+.actionButton { padding: 9px 12px; margin-top: 14px; }
+.fullWidth { width: 100%; }
+
+.inputGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+    gap: 8px;
+}
+.inputButton { min-height: 46px; padding: 8px 10px; }
+.inputButton.active {
+    color: #11161c; background: #6fda8b; border-color: #6fda8b; font-weight: 700;
+}
+
+.remoteGrid { display: grid; gap: 8px; }
+.utilityGrid, .volumeGrid, .mediaTransportGrid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.remoteButton { min-height: 50px; padding: 9px 10px; }
+.powerButton { color: #ff8b8b; }
+
+.dpad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(64px, 1fr));
+    max-width: 360px;
+    margin: 0 auto;
+    gap: 8px;
+}
+.dpadButton { aspect-ratio: 1.08 / 1; padding: 0; font-size: 1.1rem; }
+.okButton { color: #11161c; background: #6fda8b; border-color: #6fda8b; font-weight: 700; }
+
+.mediaTransportButton, .mediaPlayPause {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 54px; font-size: 1.35rem;
+}
+.status-green { color: #6fda8b !important; font-weight: 700 !important; }
+.status-yellow { color: #ffca68 !important; font-weight: 700 !important; }
+.status-red { color: #ff7474 !important; font-weight: 700 !important; }
+
+@media (max-width: 640px) {
+    body { width: 100%; overflow-x: hidden; }
+    header { padding: 10px 14px; }
+    h1 { font-size: 1.15rem; }
+    #status { font-size: .8rem; }
+
+    main {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        gap: 10px;
+        padding: 10px;
+    }
+
+    .card {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: 12px;
+        border-radius: 10px;
+    }
+
+    #device-card { order: 1; }
+    #input-card { order: 2; }
+    #navigation-card { order: 3; }
+    #media-card { order: 4; }
+    #system-card { display: none; }
+
+    #device-card h2,
+    #device-card .metric:not(:first-of-type),
+    #connectButton { display: none; }
+
+    #device-card .metric:first-of-type {
+        display: block;
+        padding: 0;
+        border: 0;
+    }
+    #device-card .metric:first-of-type > span {
+        display: block;
+        margin-bottom: 6px;
+        font-size: .8rem;
+    }
+
+    select {
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        min-height: 48px;
+        font-size: 1rem;
+    }
+
+    h2 { margin-bottom: 10px; }
+    h3 { margin: 13px 0 8px; }
+
+    .inputGrid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .inputButton { min-height: 48px; }
+
+    .utilityGrid, .volumeGrid, .mediaTransportGrid {
+        grid-template-columns: repeat(3, minmax(0,1fr));
+    }
+    .remoteButton {
+        min-height: 54px;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .dpad {
+        width: 100%;
+        max-width: 390px;
+        grid-template-columns: repeat(3, minmax(0,1fr));
+        gap: 8px;
+    }
+    .dpadButton {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1.18 / 1;
+        font-size: 1.2rem;
+    }
+}
+
+@media (max-width: 390px) {
+    main { padding: 8px; gap: 8px; }
+    .card { padding: 10px; }
+    .remoteButton { min-height: 50px; }
+}

@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime/local configuration
+server/config.yaml
+server/config.yaml.save
+config.yaml
+config.yaml.save
+
+# Pairing/runtime state
+server/data/
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# ESP32 build artifacts / OTA binaries
+.pio/
+build/
+firmware/*.bin
+firmware/*.elf
+firmware/*.map
+*.bin
+*.elf
+*.uf2
+
+# Logs / temp / editor files
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backups / archives
+*.bak
+*.save
+*.zip

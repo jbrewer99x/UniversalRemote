@@ -1,0 +1,9 @@
+# Add these settings to the existing Universal Remote service.
+
+environment:
+  FIRMWARE_DIR: "/data/firmware"
+  FIRMWARE_FILE: "universal-remote.bin"
+  FIRMWARE_VERSION_FILE: "version.txt"
+
+volumes:
+  - /mnt/App/UniversalRemote/Firmware:/data/firmware
