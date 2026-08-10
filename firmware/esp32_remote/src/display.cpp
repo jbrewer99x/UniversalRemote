@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
-
+#include "font5x7.h"
 #include "display.h"
 #include "config.h"
 
@@ -118,18 +118,7 @@ static void fillScreen(uint16_t color) {
 }
 
 // Minimal 5x7 font, enough for status/debug text.
-static const uint8_t FONT[][5] = {
-    {0x3E,0x51,0x49,0x45,0x3E}, // 0
-    {0x00,0x42,0x7F,0x40,0x00}, // 1
-    {0x42,0x61,0x51,0x49,0x46}, // 2
-    {0x21,0x41,0x45,0x4B,0x31}, // 3
-    {0x18,0x14,0x12,0x7F,0x10}, // 4
-    {0x27,0x45,0x45,0x45,0x39}, // 5
-    {0x3C,0x4A,0x49,0x49,0x30}, // 6
-    {0x01,0x71,0x09,0x05,0x03}, // 7
-    {0x36,0x49,0x49,0x49,0x36}, // 8
-    {0x06,0x49,0x49,0x29,0x1E}, // 9
-};
+
 
 static void drawPixel(
     uint16_t x,
@@ -148,13 +137,11 @@ static void drawPixel(
 }
 
 static const uint8_t* glyphFor(char c) {
-    static uint8_t blank[5] = {0,0,0,0,0};
-
-    if (c >= '0' && c <= '9') {
-        return FONT[c - '0'];
+    if (c < 0x20 || c > 0x7E) {
+        c = '?';
     }
 
-    return blank;
+    return &FONT5X7[(c - 0x20) * 5];
 }
 
 static void drawChar(
@@ -164,13 +151,10 @@ static void drawChar(
     uint16_t color,
     uint8_t scale = 1
 ) {
-    // Special-case a small set of common symbols/letters as block glyphs.
-    if (c == ' ') return;
-
     const uint8_t* glyph = glyphFor(c);
 
     for (uint8_t col = 0; col < 5; ++col) {
-        uint8_t bits = glyph[col];
+        uint8_t bits = pgm_read_byte(&glyph[col]);
 
         for (uint8_t row = 0; row < 7; ++row) {
             if (bits & (1 << row)) {
@@ -267,7 +251,7 @@ void initDisplay() {
     writeCommand(0x13);
     delay(10);
 
-    // Display inversion OFF
+    // Display inversion on
     writeCommand(0x21);
     delay(10);
 
@@ -286,5 +270,337 @@ void displayStatus(
     const String &ipAddress,
     const String &otaStatus
 ) {
-    fillScreen(0x0000);   // BLACK
+    fillScreen(COLOR_BLACK);
+
+    // Top status bar
+    fillRect(0, 0, SCREEN_W, 28, 0x2104);
+
+    drawText(
+        8,
+        9,
+        "Universal Remote",
+        COLOR_WHITE,
+        1
+    );
+
+    // Wi-Fi indicator
+    fillRect(
+        198,
+        8,
+        8,
+        8,
+        wifiConnected ? COLOR_GREEN : COLOR_RED
+    );
+
+    drawText(
+        210,
+        9,
+        wifiConnected ? "WiFi" : "OFF",
+        COLOR_WHITE,
+        1
+    );
+
+    // Main title
+    drawText(
+        12,
+        48,
+        "Universal",
+        COLOR_WHITE,
+        2
+    );
+
+    drawText(
+        12,
+        68,
+        "Remote",
+        COLOR_WHITE,
+        2
+    );
+
+    // Firmware card
+    fillRect(12, 104, 216, 42, 0x18E3);
+
+    drawText(
+        20,
+        114,
+        "Firmware",
+        0xC618,
+        1
+    );
+
+    drawText(
+        20,
+        128,
+        String(RemoteConfig::FIRMWARE_VERSION),
+        COLOR_WHITE,
+        1
+    );
+
+    // Network card
+    fillRect(12, 156, 216, 58, 0x18E3);
+
+    drawText(
+        20,
+        166,
+        "Network",
+        0xC618,
+        1
+    );
+
+    drawText(
+        20,
+        180,
+        wifiConnected ? "Connected" : "Disconnected",
+        wifiConnected ? COLOR_GREEN : COLOR_RED,
+        1
+    );
+
+    drawText(
+        20,
+        194,
+        ipAddress,
+        COLOR_WHITE,
+        1
+    );
+
+    // OTA card
+    fillRect(12, 224, 216, 54, 0x18E3);
+
+    drawText(
+        20,
+        234,
+        "OTA",
+        0xC618,
+        1
+    );
+
+    drawText(
+        20,
+        250,
+        otaStatus,
+        COLOR_WHITE,
+        1
+    );
+
+    // Bottom hint
+    drawText(
+        12,
+        298,
+        "Touch setup coming next",
+        0x8410,
+        1
+    );
+}
+void displaySettings(
+    uint8_t brightnessPercent,
+    uint16_t sleepSeconds
+) {
+    fillScreen(COLOR_BLACK);
+
+    // Header
+    fillRect(0, 0, SCREEN_W, 36, 0x2104);
+
+    drawText(10, 14, "< Back", COLOR_WHITE, 1);
+    drawText(92, 14, "Settings", COLOR_WHITE, 1);
+
+    // Brightness
+    drawText(14, 60, "Brightness", COLOR_WHITE, 1);
+
+    String brightnessText =
+        String(brightnessPercent) + "%";
+
+    drawText(190, 60, brightnessText, 0xC618, 1);
+
+    // Brightness slider background
+    fillRect(14, 82, 212, 8, 0x4208);
+
+    uint16_t brightnessWidth =
+        ((uint32_t)brightnessPercent * 212) / 100;
+
+    fillRect(
+        14,
+        82,
+        brightnessWidth,
+        8,
+        COLOR_WHITE
+    );
+
+    // Slider thumb
+    uint16_t brightnessX =
+        14 + ((uint32_t)brightnessPercent * 212) / 100;
+
+    if (brightnessX > 225) {
+        brightnessX = 225;
+    }
+
+    fillRect(
+        brightnessX - 3,
+        77,
+        7,
+        18,
+        COLOR_WHITE
+    );
+
+    // Sleep timer
+    drawText(14, 126, "Sleep Timer", COLOR_WHITE, 1);
+
+    String sleepText;
+
+    if (sleepSeconds == 0) {
+        sleepText = "Off";
+    } else {
+        sleepText = String(sleepSeconds) + " sec";
+    }
+
+    drawText(170, 126, sleepText, 0xC618, 1);
+
+    // Sleep slider
+    fillRect(14, 150, 212, 8, 0x4208);
+
+    uint16_t clampedSleep =
+        constrain(sleepSeconds, 2, 120);
+
+    uint16_t sleepWidth =
+        ((uint32_t)(clampedSleep - 2) * 212) / 118;
+
+    fillRect(
+        14,
+        150,
+        sleepWidth,
+        8,
+        COLOR_WHITE
+    );
+
+    uint16_t sleepX = 14 + sleepWidth;
+
+    if (sleepX > 225) {
+        sleepX = 225;
+    }
+
+    fillRect(
+        sleepX - 3,
+        145,
+        7,
+        18,
+        COLOR_WHITE
+    );
+
+    // Future settings
+    drawText(14, 198, "WiFi", 0x8410, 1);
+    drawText(14, 220, "Bluetooth", 0x8410, 1);
+
+    drawText(
+        14,
+        286,
+        "Universal Remote 0.1.7",
+        0x8410,
+        1
+    );
+}
+void updateBrightnessSlider(uint8_t brightnessPercent) {
+    // Clear only the dynamic brightness area
+    fillRect(190, 60, 36, 8, COLOR_BLACK);
+    fillRect(14, 77, 212, 18, COLOR_BLACK);
+
+    drawText(14, 60, "Brightness", COLOR_WHITE, 1);
+
+    String valueText = String(brightnessPercent) + "%";
+    drawText(190, 60, valueText, 0xC618, 1);
+
+    // Slider track
+    fillRect(14, 82, 212, 8, 0x4208);
+
+    uint16_t width =
+        ((uint32_t)brightnessPercent * 212) / 100;
+
+    if (width > 0) {
+        fillRect(14, 82, width, 8, COLOR_WHITE);
+    }
+
+    uint16_t thumbX = 14 + width;
+
+    if (thumbX > 225) {
+        thumbX = 225;
+    }
+
+    fillRect(
+        thumbX - 3,
+        77,
+        7,
+        18,
+        COLOR_WHITE
+    );
+}
+
+void updateSleepSlider(uint16_t sleepSeconds) {
+    static uint16_t lastThumbX = 14;
+
+    uint16_t value = constrain(
+        sleepSeconds,
+        2,
+        120
+    );
+
+    uint16_t width =
+        ((uint32_t)(value - 2) * 212) / 118;
+
+    uint16_t thumbX = 14 + width;
+
+    if (thumbX > 225) {
+        thumbX = 225;
+    }
+
+    // Update numeric value only
+    fillRect(170, 126, 56, 8, COLOR_BLACK);
+
+    String valueText =
+        String(sleepSeconds) + " sec";
+
+    drawText(
+        170,
+        126,
+        valueText,
+        0xC618,
+        1
+    );
+
+    // Erase old thumb area only
+    fillRect(
+        lastThumbX - 4,
+        144,
+        9,
+        20,
+        COLOR_BLACK
+    );
+
+    // Redraw track
+    fillRect(
+        14,
+        150,
+        212,
+        8,
+        0x4208
+    );
+
+    // Active portion
+    if (width > 0) {
+        fillRect(
+            14,
+            150,
+            width,
+            8,
+            COLOR_WHITE
+        );
+    }
+
+    // New thumb
+    fillRect(
+        thumbX - 3,
+        145,
+        7,
+        18,
+        COLOR_WHITE
+    );
+
+    lastThumbX = thumbX;
 }

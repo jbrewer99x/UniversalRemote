@@ -9,3 +9,10 @@ void displayStatus(
     const String &otaStatus
 );
 void setDisplayBrightness(uint8_t percent);
+
+void displaySettings(
+    uint8_t brightnessPercent,
+    uint16_t sleepSeconds
+);
+void updateBrightnessSlider(uint8_t brightnessPercent);
+void updateSleepSlider(uint16_t sleepSeconds);

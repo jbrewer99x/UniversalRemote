@@ -5,11 +5,14 @@
 #include "ota_client.h"
 #include "secrets.h"
 #include "display.h"
+#include "touch.h"
 
 Preferences prefs;
 bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastUpdateCheck = 0;
+uint8_t uiBrightness = 75;
+uint16_t uiSleepSeconds = 30;
 
 #define LCD_DC   41
 #define LCD_CS   42
@@ -19,6 +22,12 @@ uint32_t lastUpdateCheck = 0;
 #define LCD_BL   5
 
 
+enum class ScreenMode {
+    Home,
+    Settings
+};
+
+ScreenMode currentScreen = ScreenMode::Home;
 
 
 bool connectWifi() {
@@ -91,7 +100,19 @@ void setup() {
 );
     Serial.println("Target: Waveshare ESP32-S3-Touch-LCD-2.8");
     initDisplay();
+    setDisplayBrightness(uiBrightness);
+    initTouch();
     prefs.begin("remote", false);
+    uiBrightness = prefs.getUChar(
+    "brightness",
+    75
+);
+setDisplayBrightness(uiBrightness);
+
+uiSleepSeconds = prefs.getUShort(
+    "sleep_sec",
+    30
+);
     autoUpdate = prefs.getBool("auto_update", RemoteConfig::DEFAULT_AUTO_UPDATE);
 
     OtaClient::begin();
@@ -112,6 +133,105 @@ void setup() {
 
 void loop() {
     serialConsole();
+   RemoteTouchPoint point = readTouch();
+
+if (point.touched) {
+
+    // HOME -> SETTINGS
+    if (
+        currentScreen == ScreenMode::Home &&
+        point.y < 28
+    ) {
+        currentScreen = ScreenMode::Settings;
+
+        Serial.println("UI: opening Settings");
+
+        displaySettings(
+            uiBrightness,
+            uiSleepSeconds
+        );
+    }
+
+    // SETTINGS
+    else if (currentScreen == ScreenMode::Settings) {
+
+        // Back button
+        if (
+            point.y < 36 &&
+            point.x < 75
+        ) {
+            currentScreen = ScreenMode::Home;
+
+            Serial.println("UI: returning Home");
+
+            displayStatus(
+                WiFi.status() == WL_CONNECTED,
+                WiFi.status() == WL_CONNECTED
+                    ? WiFi.localIP().toString()
+                    : "0.0.0.0",
+                "Ready"
+            );
+        }
+
+        // Brightness slider
+        else if (
+            point.y >= 70 &&
+            point.y <= 105 &&
+            point.x >= 14 &&
+            point.x <= 226
+        ) {
+            int value = map(
+                point.x,
+                14,
+                226,
+                0,
+                100
+            );
+
+            uiBrightness = constrain(value, 0, 100);
+
+        
+        setDisplayBrightness(uiBrightness);
+        updateBrightnessSlider(uiBrightness);
+
+            Serial.printf(
+                "UI: brightness = %u%%\n",
+                uiBrightness
+            );
+        }
+
+        // Sleep timer slider
+        else if (
+            point.y >= 138 &&
+            point.y <= 175 &&
+            point.x >= 14 &&
+            point.x <= 226
+        ) {
+            int value = map(
+                point.x,
+                14,
+                226,
+                2,
+                120
+            );
+
+            uiSleepSeconds = constrain(
+                value,
+                2,
+                120
+            );
+
+           updateSleepSlider(uiSleepSeconds);
+
+          
+
+            Serial.printf(
+                "UI: sleep timer = %u sec\n",
+                uiSleepSeconds
+            );
+        }
+    }
+}
     uint32_t now = millis();
 
     if (WiFi.status() != WL_CONNECTED &&
