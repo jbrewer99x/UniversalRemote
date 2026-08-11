@@ -34,6 +34,19 @@ enum class ScreenMode {
 
 ScreenMode currentScreen = ScreenMode::Home;
 
+enum class RemoteDevice {
+    PC,
+    Roku
+};
+
+RemoteDevice selectedDevice =
+    RemoteDevice::PC;
+
+const char* selectedDeviceName() {
+    return selectedDevice == RemoteDevice::PC
+        ? "pc"
+        : "roku";
+}
 
 bool connectWifi() {
     if (WiFi.status() == WL_CONNECTED) return true;
@@ -355,17 +368,4 @@ if (newTap) {
     }
 
     delay(5);
-}
-enum class RemoteDevice {
-    PC,
-    Roku
-};
-
-RemoteDevice selectedDevice =
-    RemoteDevice::PC;
-
-const char* selectedDeviceName() {
-    return selectedDevice == RemoteDevice::PC
-        ? "pc"
-        : "roku";
 }
