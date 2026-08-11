@@ -9,6 +9,7 @@
 
 Preferences prefs;
 bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
+bool wasTouching = false;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastUpdateCheck = 0;
 uint8_t uiBrightness = 75;
@@ -20,7 +21,8 @@ uint16_t uiSleepSeconds = 30;
 #define LCD_MOSI 45
 #define LCD_RST  39
 #define LCD_BL   5
-
+#define PWR_KEY_PIN      6
+#define PWR_CONTROL_PIN  7
 
 enum class ScreenMode {
     Home,
@@ -92,6 +94,9 @@ void serialConsole() {
 }
 
 void setup() {
+      // Latch battery power ON
+    pinMode(PWR_CONTROL_PIN, OUTPUT);
+    digitalWrite(PWR_CONTROL_PIN, HIGH);
     Serial.begin(115200);
     delay(1000);
     Serial.printf(
@@ -135,7 +140,9 @@ void loop() {
     serialConsole();
    RemoteTouchPoint point = readTouch();
 
-if (point.touched) {
+bool newTap = point.touched && !wasTouching;
+
+if (newTap) {
 
     // HOME -> SETTINGS
     if (
@@ -232,6 +239,7 @@ if (point.touched) {
         }
     }
 }
+    wasTouching = point.touched;
     uint32_t now = millis();
 
     if (WiFi.status() != WL_CONNECTED &&
