@@ -268,7 +268,8 @@ void initDisplay() {
 void displayStatus(
     bool wifiConnected,
     const String &ipAddress,
-    const String &otaStatus
+    const String &otaStatus,
+    bool pcSelected
 ) {
     fillScreen(COLOR_BLACK);
 
@@ -286,15 +287,41 @@ void displayStatus(
 
     // Battery percentage is drawn separately by
     // updateBatteryStatus() from main.cpp.
+// ---------- DEVICE SELECTOR ----------
 
+// PC
+fillRect(
+    8,
+    36,
+    108,
+    30,
+    pcSelected ? COLOR_GREEN : 0x18E3
+);
 
-    // ---------- DEVICE SELECTOR ----------
-    // PC selected by default for this visual test.
-    fillRect(8, 36, 108, 30, COLOR_GREEN);
-    drawText(55, 47, "PC", COLOR_BLACK, 1);
+drawText(
+    55,
+    47,
+    "PC",
+    pcSelected ? COLOR_BLACK : COLOR_WHITE,
+    1
+);
 
-    fillRect(124, 36, 108, 30, 0x18E3);
-    drawText(164, 47, "ROKU", COLOR_WHITE, 1);
+// Roku
+fillRect(
+    124,
+    36,
+    108,
+    30,
+    pcSelected ? 0x18E3 : COLOR_GREEN
+);
+
+drawText(
+    164,
+    47,
+    "ROKU",
+    pcSelected ? COLOR_WHITE : COLOR_BLACK,
+    1
+);
 
 
     // ---------- NAVIGATION ----------

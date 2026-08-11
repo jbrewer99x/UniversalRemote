@@ -6,7 +6,8 @@ void initDisplay();
 void displayStatus(
     bool wifiConnected,
     const String &ipAddress,
-    const String &otaStatus
+    const String &otaStatus,
+    bool pcSelected
 );
 void setDisplayBrightness(uint8_t percent);
 
