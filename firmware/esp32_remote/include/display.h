@@ -16,3 +16,4 @@ void displaySettings(
 );
 void updateBrightnessSlider(uint8_t brightnessPercent);
 void updateSleepSlider(uint16_t sleepSeconds);
+void updateBatteryStatus(uint8_t percent);

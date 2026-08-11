@@ -6,6 +6,8 @@
 #include "secrets.h"
 #include "display.h"
 #include "touch.h"
+#include "remote_api.h"
+
 
 Preferences prefs;
 bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
@@ -23,6 +25,7 @@ uint16_t uiSleepSeconds = 30;
 #define LCD_BL   5
 #define PWR_KEY_PIN      6
 #define PWR_CONTROL_PIN  7
+#define BAT_ADC_PIN 8
 
 enum class ScreenMode {
     Home,
@@ -67,7 +70,42 @@ void printInfo() {
     Serial.printf("TrueNAS: %s\n", REMOTE_SERVER_URL);
 }
 
+float readBatteryVoltage() {
+    uint32_t totalMv = 0;
 
+    // Average a few readings to keep the display stable.
+    for (int i = 0; i < 8; i++) {
+        totalMv += analogReadMilliVolts(BAT_ADC_PIN);
+        delay(2);
+    }
+
+    float adcVolts = (totalMv / 8.0f) / 1000.0f;
+
+    // Waveshare V2 battery-divider calibration.
+    return (adcVolts * 3.0f) / 0.990476f;
+}
+
+uint8_t batteryVoltageToPercent(float volts) {
+    // Approximation for a normal 1-cell Li-ion/LiPo discharge curve.
+    if (volts >= 4.20f) return 100;
+    if (volts >= 4.10f) return 90;
+    if (volts >= 4.00f) return 80;
+    if (volts >= 3.90f) return 70;
+    if (volts >= 3.80f) return 55;
+    if (volts >= 3.70f) return 40;
+    if (volts >= 3.60f) return 25;
+    if (volts >= 3.50f) return 15;
+    if (volts >= 3.40f) return 8;
+    if (volts >= 3.30f) return 3;
+
+    return 0;
+}
+
+uint8_t readBatteryPercent() {
+    return batteryVoltageToPercent(
+        readBatteryVoltage()
+    );
+}
 
 void checkUpdate(bool install) {
     auto result = OtaClient::check(install);
@@ -131,7 +169,8 @@ uiSleepSeconds = prefs.getUShort(
         : "0.0.0.0",
     "OTA OK"
     );
-
+// Battery percentage
+updateBatteryStatus(readBatteryPercent());
     // Wait 60 seconds before the first automatic update.
     lastUpdateCheck = millis();
 }
@@ -144,100 +183,160 @@ bool newTap = point.touched && !wasTouching;
 
 if (newTap) {
 
-    // HOME -> SETTINGS
     if (
-        currentScreen == ScreenMode::Home &&
-        point.y < 28
-    ) {
-        currentScreen = ScreenMode::Settings;
+    currentScreen == ScreenMode::Home &&
+    point.touched
+) {
 
-        Serial.println("UI: opening Settings");
+    // Status bar -> Settings
+    if (point.y < 28) {
+        currentScreen = ScreenMode::Settings;
 
         displaySettings(
             uiBrightness,
             uiSleepSeconds
         );
+
+        updateBatteryStatus(
+            readBatteryPercent()
+        );
+
+        return;
     }
 
-    // SETTINGS
-    else if (currentScreen == ScreenMode::Settings) {
+    // PC
+    if (
+        point.x >= 8 &&
+        point.x <= 116 &&
+        point.y >= 36 &&
+        point.y <= 66
+    ) {
+        selectedDevice =
+            RemoteDevice::PC;
 
-        // Back button
-        if (
-            point.y < 36 &&
-            point.x < 75
-        ) {
-            currentScreen = ScreenMode::Home;
+        displayStatus(
+            WiFi.status() == WL_CONNECTED,
+            WiFi.localIP().toString(),
+            "Ready"
+        );
 
-            Serial.println("UI: returning Home");
+        updateBatteryStatus(
+            readBatteryPercent()
+        );
 
-            displayStatus(
-                WiFi.status() == WL_CONNECTED,
-                WiFi.status() == WL_CONNECTED
-                    ? WiFi.localIP().toString()
-                    : "0.0.0.0",
-                "Ready"
-            );
-        }
-
-        // Brightness slider
-        else if (
-            point.y >= 70 &&
-            point.y <= 105 &&
-            point.x >= 14 &&
-            point.x <= 226
-        ) {
-            int value = map(
-                point.x,
-                14,
-                226,
-                0,
-                100
-            );
-
-            uiBrightness = constrain(value, 0, 100);
-
-        
-        setDisplayBrightness(uiBrightness);
-        updateBrightnessSlider(uiBrightness);
-
-            Serial.printf(
-                "UI: brightness = %u%%\n",
-                uiBrightness
-            );
-        }
-
-        // Sleep timer slider
-        else if (
-            point.y >= 138 &&
-            point.y <= 175 &&
-            point.x >= 14 &&
-            point.x <= 226
-        ) {
-            int value = map(
-                point.x,
-                14,
-                226,
-                2,
-                120
-            );
-
-            uiSleepSeconds = constrain(
-                value,
-                2,
-                120
-            );
-
-           updateSleepSlider(uiSleepSeconds);
-
-          
-
-            Serial.printf(
-                "UI: sleep timer = %u sec\n",
-                uiSleepSeconds
-            );
-        }
+        return;
     }
+
+    // Roku
+    if (
+        point.x >= 124 &&
+        point.x <= 232 &&
+        point.y >= 36 &&
+        point.y <= 66
+    ) {
+        selectedDevice =
+            RemoteDevice::Roku;
+
+        displayStatus(
+            WiFi.status() == WL_CONNECTED,
+            WiFi.localIP().toString(),
+            "Ready"
+        );
+
+        updateBatteryStatus(
+            readBatteryPercent()
+        );
+
+        return;
+    }
+
+    const char *device =
+        selectedDeviceName();
+
+    // Power
+    if (point.x >= 8 && point.x <= 78 &&
+        point.y >= 74 && point.y <= 106) {
+        sendRemoteCommand(device, "power");
+    }
+
+    // Home
+    else if (point.x >= 85 && point.x <= 155 &&
+             point.y >= 74 && point.y <= 106) {
+        sendRemoteCommand(device, "home");
+    }
+
+    // Back
+    else if (point.x >= 162 && point.x <= 232 &&
+             point.y >= 74 && point.y <= 106) {
+        sendRemoteCommand(device, "back");
+    }
+
+    // Up
+    else if (point.x >= 88 && point.x <= 152 &&
+             point.y >= 113 && point.y <= 147) {
+        sendRemoteCommand(device, "up");
+    }
+
+    // Left
+    else if (point.x >= 17 && point.x <= 81 &&
+             point.y >= 151 && point.y <= 189) {
+        sendRemoteCommand(device, "left");
+    }
+
+    // OK
+    else if (point.x >= 88 && point.x <= 152 &&
+             point.y >= 151 && point.y <= 189) {
+        sendRemoteCommand(device, "ok");
+    }
+
+    // Right
+    else if (point.x >= 159 && point.x <= 223 &&
+             point.y >= 151 && point.y <= 189) {
+        sendRemoteCommand(device, "right");
+    }
+
+    // Down
+    else if (point.x >= 88 && point.x <= 152 &&
+             point.y >= 193 && point.y <= 227) {
+        sendRemoteCommand(device, "down");
+    }
+
+    // Previous
+    else if (point.x >= 8 && point.x <= 78 &&
+             point.y >= 235 && point.y <= 267) {
+        sendRemoteCommand(device, "previous");
+    }
+
+    // Play/Pause
+    else if (point.x >= 85 && point.x <= 155 &&
+             point.y >= 235 && point.y <= 267) {
+        sendRemoteCommand(device, "play_pause");
+    }
+
+    // Next
+    else if (point.x >= 162 && point.x <= 232 &&
+             point.y >= 235 && point.y <= 267) {
+        sendRemoteCommand(device, "next");
+    }
+
+    // Volume -
+    else if (point.x >= 8 && point.x <= 78 &&
+             point.y >= 275 && point.y <= 311) {
+        sendRemoteCommand(device, "volume_down");
+    }
+
+    // Mute
+    else if (point.x >= 85 && point.x <= 155 &&
+             point.y >= 275 && point.y <= 311) {
+        sendRemoteCommand(device, "mute");
+    }
+
+    // Volume +
+    else if (point.x >= 162 && point.x <= 232 &&
+             point.y >= 275 && point.y <= 311) {
+        sendRemoteCommand(device, "volume_up");
+    }
+
 }
     wasTouching = point.touched;
     uint32_t now = millis();
@@ -256,4 +355,17 @@ if (newTap) {
     }
 
     delay(5);
+}
+enum class RemoteDevice {
+    PC,
+    Roku
+};
+
+RemoteDevice selectedDevice =
+    RemoteDevice::PC;
+
+const char* selectedDeviceName() {
+    return selectedDevice == RemoteDevice::PC
+        ? "pc"
+        : "roku";
 }

@@ -272,124 +272,85 @@ void displayStatus(
 ) {
     fillScreen(COLOR_BLACK);
 
-    // Top status bar
+    // ---------- STATUS BAR ----------
     fillRect(0, 0, SCREEN_W, 28, 0x2104);
-
-    drawText(
-        8,
-        9,
-        "Universal Remote",
-        COLOR_WHITE,
-        1
-    );
 
     // Wi-Fi indicator
     fillRect(
-        198,
-        8,
+        10,
+        10,
         8,
         8,
         wifiConnected ? COLOR_GREEN : COLOR_RED
     );
 
-    drawText(
-        210,
-        9,
-        wifiConnected ? "WiFi" : "OFF",
-        COLOR_WHITE,
-        1
-    );
+    // Battery percentage is drawn separately by
+    // updateBatteryStatus() from main.cpp.
 
-    // Main title
-    drawText(
-        12,
-        48,
-        "Universal",
-        COLOR_WHITE,
-        2
-    );
 
-    drawText(
-        12,
-        68,
-        "Remote",
-        COLOR_WHITE,
-        2
-    );
+    // ---------- DEVICE SELECTOR ----------
+    // PC selected by default for this visual test.
+    fillRect(8, 36, 108, 30, COLOR_GREEN);
+    drawText(55, 47, "PC", COLOR_BLACK, 1);
 
-    // Firmware card
-    fillRect(12, 104, 216, 42, 0x18E3);
+    fillRect(124, 36, 108, 30, 0x18E3);
+    drawText(164, 47, "ROKU", COLOR_WHITE, 1);
 
-    drawText(
-        20,
-        114,
-        "Firmware",
-        0xC618,
-        1
-    );
 
-    drawText(
-        20,
-        128,
-        String(RemoteConfig::FIRMWARE_VERSION),
-        COLOR_WHITE,
-        1
-    );
+    // ---------- NAVIGATION ----------
+    // Power / Home / Back
+    fillRect(8, 74, 70, 32, 0x18E3);
+    drawText(25, 86, "Power", COLOR_RED, 1);
 
-    // Network card
-    fillRect(12, 156, 216, 58, 0x18E3);
+    fillRect(85, 74, 70, 32, 0x18E3);
+    drawText(105, 86, "Home", COLOR_WHITE, 1);
 
-    drawText(
-        20,
-        166,
-        "Network",
-        0xC618,
-        1
-    );
+    fillRect(162, 74, 70, 32, 0x18E3);
+    drawText(183, 86, "Back", COLOR_WHITE, 1);
 
-    drawText(
-        20,
-        180,
-        wifiConnected ? "Connected" : "Disconnected",
-        wifiConnected ? COLOR_GREEN : COLOR_RED,
-        1
-    );
 
-    drawText(
-        20,
-        194,
-        ipAddress,
-        COLOR_WHITE,
-        1
-    );
+    // ---------- D-PAD ----------
+    // Up
+    fillRect(88, 113, 64, 34, 0x18E3);
+    drawText(117, 125, "^", COLOR_WHITE, 1);
 
-    // OTA card
-    fillRect(12, 224, 216, 54, 0x18E3);
+    // Left
+    fillRect(17, 151, 64, 38, 0x18E3);
+    drawText(47, 165, "<", COLOR_WHITE, 1);
 
-    drawText(
-        20,
-        234,
-        "OTA",
-        0xC618,
-        1
-    );
+    // OK
+    fillRect(88, 151, 64, 38, COLOR_GREEN);
+    drawText(113, 165, "OK", COLOR_BLACK, 1);
 
-    drawText(
-        20,
-        250,
-        otaStatus,
-        COLOR_WHITE,
-        1
-    );
+    // Right
+    fillRect(159, 151, 64, 38, 0x18E3);
+    drawText(188, 165, ">", COLOR_WHITE, 1);
 
-    // Bottom hint
-    drawText(
-        12,
-        298,
-        "Touch setup coming next",
-        0x8410,
-        1
-    );
+    // Down
+    fillRect(88, 193, 64, 34, 0x18E3);
+    drawText(117, 205, "v", COLOR_WHITE, 1);
+
+
+    // ---------- MEDIA ----------
+    fillRect(8, 235, 70, 32, 0x18E3);
+    drawText(28, 247, "|<<", COLOR_WHITE, 1);
+
+    fillRect(85, 235, 70, 32, 0x18E3);
+    drawText(105, 247, ">||", COLOR_WHITE, 1);
+
+    fillRect(162, 235, 70, 32, 0x18E3);
+    drawText(182, 247, ">>|", COLOR_WHITE, 1);
+
+
+    // ---------- AUDIO ----------
+    fillRect(8, 275, 70, 36, 0x18E3);
+    drawText(26, 289, "Vol-", COLOR_WHITE, 1);
+
+    fillRect(85, 275, 70, 36, 0x18E3);
+    drawText(105, 289, "Mute", COLOR_WHITE, 1);
+
+    fillRect(162, 275, 70, 36, 0x18E3);
+    drawText(180, 289, "Vol+", COLOR_WHITE, 1);
 }
 void displaySettings(
     uint8_t brightnessPercent,
@@ -603,4 +564,22 @@ void updateSleepSlider(uint16_t sleepSeconds) {
     );
 
     lastThumbX = thumbX;
+    
+}
+
+void updateBatteryStatus(uint8_t percent) {
+    if (percent > 100) percent = 100;
+
+    // Clear only the battery portion of the status bar.
+    fillRect(196, 4, 44, 20, 0x2104);
+
+    String text = String(percent) + "%";
+
+    drawText(
+        202,
+        9,
+        text,
+        COLOR_WHITE,
+        1
+    );
 }
