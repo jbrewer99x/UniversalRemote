@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void initDisplay();
+void updateDeviceSelector(bool pcSelected);
 void displayStatus(
     bool wifiConnected,
     const String &ipAddress,

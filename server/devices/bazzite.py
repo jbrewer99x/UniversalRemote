@@ -51,6 +51,8 @@ class BazzitePC:
                 "sleep",
                 "shutdown",
                 "custom",
+                "rewind",
+                "fast_forward",
             ],
         }
 

@@ -272,14 +272,14 @@ void handleHomeTap(uint16_t x, uint16_t y) {
     if (x >= 8 && x <= 116 && y >= 36 && y <= 66) {
         selectedDevice = RemoteDevice::PC;
         Serial.println("UI: selected PC");
-        showHome();
+        updateDeviceSelector(true);
         return;
     }
 
     if (x >= 124 && x <= 232 && y >= 36 && y <= 66) {
         selectedDevice = RemoteDevice::Roku;
         Serial.println("UI: selected Roku");
-        showHome();
+        updateDeviceSelector(false);
         return;
     }
 
@@ -290,10 +290,65 @@ void handleHomeTap(uint16_t x, uint16_t y) {
     else if (x >= 17 && x <= 81 && y >= 151 && y <= 189) sendSelectedCommand("left");
     else if (x >= 88 && x <= 152 && y >= 151 && y <= 189) sendSelectedCommand("ok");
     else if (x >= 159 && x <= 223 && y >= 151 && y <= 189) sendSelectedCommand("right");
-    else if (x >= 88 && x <= 152 && y >= 193 && y <= 227) sendSelectedCommand("down");
-    else if (x >= 8 && x <= 78 && y >= 235 && y <= 267) sendSelectedCommand("previous");
-    else if (x >= 85 && x <= 155 && y >= 235 && y <= 267) sendSelectedCommand("play_pause");
-    else if (x >= 162 && x <= 232 && y >= 235 && y <= 267) sendSelectedCommand("next");
+    // Previous
+else if (
+    x >= 17 &&
+    x <= 81 &&
+    y >= 193 &&
+    y <= 227
+) {
+    sendSelectedCommand("previous");
+}
+
+// Down
+else if (
+    x >= 88 &&
+    x <= 152 &&
+    y >= 193 &&
+    y <= 227
+) {
+    sendSelectedCommand("down");
+}
+
+// Next
+else if (
+    x >= 159 &&
+    x <= 223 &&
+    y >= 193 &&
+    y <= 227
+) {
+    sendSelectedCommand("next");
+}
+
+// Rewind
+else if (
+    x >= 8 &&
+    x <= 78 &&
+    y >= 235 &&
+    y <= 267
+) {
+    sendSelectedCommand("rewind");
+}
+
+// Play / Pause
+else if (
+    x >= 85 &&
+    x <= 155 &&
+    y >= 235 &&
+    y <= 267
+) {
+    sendSelectedCommand("play_pause");
+}
+
+// Fast Forward
+else if (
+    x >= 162 &&
+    x <= 232 &&
+    y >= 235 &&
+    y <= 267
+) {
+    sendSelectedCommand("fast_forward");
+}
     else if (x >= 8 && x <= 78 && y >= 275 && y <= 311) sendSelectedCommand("volume_down");
     else if (x >= 85 && x <= 155 && y >= 275 && y <= 311) sendSelectedCommand("mute");
     else if (x >= 162 && x <= 232 && y >= 275 && y <= 311) sendSelectedCommand("volume_up");

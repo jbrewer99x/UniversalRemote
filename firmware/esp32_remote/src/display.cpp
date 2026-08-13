@@ -287,41 +287,8 @@ void displayStatus(
 
     // Battery percentage is drawn separately by
     // updateBatteryStatus() from main.cpp.
-// ---------- DEVICE SELECTOR ----------
-
-// PC
-fillRect(
-    8,
-    36,
-    108,
-    30,
-    pcSelected ? COLOR_GREEN : 0x18E3
-);
-
-drawText(
-    55,
-    47,
-    "PC",
-    pcSelected ? COLOR_BLACK : COLOR_WHITE,
-    1
-);
-
-// Roku
-fillRect(
-    124,
-    36,
-    108,
-    30,
-    pcSelected ? 0x18E3 : COLOR_GREEN
-);
-
-drawText(
-    164,
-    47,
-    "ROKU",
-    pcSelected ? COLOR_WHITE : COLOR_BLACK,
-    1
-);
+    // ---------- DEVICE SELECTOR ----------
+    updateDeviceSelector(pcSelected);
 
 
     // ---------- NAVIGATION ----------
@@ -353,20 +320,34 @@ drawText(
     fillRect(159, 151, 64, 38, 0x18E3);
     drawText(188, 165, ">", COLOR_WHITE, 1);
 
+    // ---------- LOWER D-PAD ROW ----------
+
+    // Previous
+    fillRect(17, 193, 64, 34, 0x18E3);
+    drawText(34, 205, "Prev", COLOR_WHITE, 1);
+
     // Down
     fillRect(88, 193, 64, 34, 0x18E3);
     drawText(117, 205, "v", COLOR_WHITE, 1);
 
+    // Next
+    fillRect(159, 193, 64, 34, 0x18E3);
+    drawText(178, 205, "Next", COLOR_WHITE, 1);
+
 
     // ---------- MEDIA ----------
-    fillRect(8, 235, 70, 32, 0x18E3);
-    drawText(28, 247, "|<<", COLOR_WHITE, 1);
 
+    // Rewind
+    fillRect(8, 235, 70, 32, 0x18E3);
+    drawText(30, 247, "<<", COLOR_WHITE, 1);
+
+    // Play / Pause
     fillRect(85, 235, 70, 32, 0x18E3);
     drawText(105, 247, ">||", COLOR_WHITE, 1);
 
+    // Fast Forward
     fillRect(162, 235, 70, 32, 0x18E3);
-    drawText(182, 247, ">>|", COLOR_WHITE, 1);
+    drawText(183, 247, ">>", COLOR_WHITE, 1);
 
 
     // ---------- AUDIO ----------
@@ -607,6 +588,42 @@ void updateBatteryStatus(uint8_t percent) {
         9,
         text,
         COLOR_WHITE,
+        1
+    );
+}
+
+void updateDeviceSelector(bool pcSelected) {
+    // PC
+    fillRect(
+        8,
+        36,
+        108,
+        30,
+        pcSelected ? COLOR_GREEN : 0x18E3
+    );
+
+    drawText(
+        55,
+        47,
+        "PC",
+        pcSelected ? COLOR_BLACK : COLOR_WHITE,
+        1
+    );
+
+    // Roku
+    fillRect(
+        124,
+        36,
+        108,
+        30,
+        pcSelected ? 0x18E3 : COLOR_GREEN
+    );
+
+    drawText(
+        164,
+        47,
+        "ROKU",
+        pcSelected ? COLOR_WHITE : COLOR_BLACK,
         1
     );
 }
