@@ -9,6 +9,9 @@
 #include "touch.h"
 #include "remote_api.h"
 #include "imu.h"
+#include "sd_storage.h"
+#include "sd_updater.h"
+#include "audio_player.h"
 
 #define PWR_KEY_PIN      6
 #define PWR_CONTROL_PIN  7
@@ -230,16 +233,26 @@ void serialConsole() {
     char c = Serial.read();
 
     if (c == 'i') printInfo();
-    else if (c == 'c') checkUpdate(false);
-    else if (c == 'u') checkUpdate(true);
-    else if (c == 'a') {
+else if (c == 'c') checkUpdate(false);
+else if (c == 'u') checkUpdate(true);
+else if (c == 'p') {
+    playWav(
+        "/content/oh-bloody-hell.wav"
+    );
+}
+else if (c == 's') {
+    SdUpdater::check();
+}
+else if (c == 'a') {
         autoUpdate = !autoUpdate;
         prefs.putBool("auto_update", autoUpdate);
         Serial.printf("Auto update: %s\n", autoUpdate ? "ON" : "OFF");
     } else if (c == 'r') {
         ESP.restart();
     } else if (c == 'h' || c == '?') {
-        Serial.println("h help | i info | c check | u update | a auto-update toggle | r reboot");
+       Serial.println(
+    "h help | i info | c check | u update | s sync SD | "
+    "p play WAV | a auto-update toggle | r reboot");
     }
 }
 
@@ -345,11 +358,16 @@ void setup() {
     lastUpdateCheck = millis();
     lastActivityAt = millis();
     primeImuBaseline();
+
+    if (initSdCard()) {
+        testSdCard();
+}
+initAudio();
 }
 
 void loop() {
     serialConsole();
-
+    serviceAudio();
     RemoteTouchPoint point = readTouch();
     uint32_t now = millis();
 
@@ -400,14 +418,16 @@ void loop() {
         connectWifi();
     }
 
-    if (
-        autoUpdate &&
-        WiFi.status() == WL_CONNECTED &&
-        now - lastUpdateCheck >= RemoteConfig::OTA_CHECK_INTERVAL_MS
-    ) {
-        lastUpdateCheck = now;
-        checkUpdate(true);
-    }
+if (
+    autoUpdate &&
+    WiFi.status() == WL_CONNECTED &&
+    now - lastUpdateCheck >= RemoteConfig::OTA_CHECK_INTERVAL_MS
+) {
+    lastUpdateCheck = now;
+
+    checkUpdate(true);
+    SdUpdater::check();
+}
 
     if (
         !screenSleeping &&

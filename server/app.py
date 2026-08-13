@@ -23,6 +23,8 @@ FIRMWARE_DIR = Path(os.getenv("FIRMWARE_DIR", "/app/Firmware"))
 FIRMWARE_FILE = os.getenv("FIRMWARE_FILE", "universal-remote.bin")
 FIRMWARE_VERSION_FILE = os.getenv("FIRMWARE_VERSION_FILE", "version.txt")
 
+SD_FIRMWARE_DIR = FIRMWARE_DIR / "sd"
+
 app = FastAPI(title="Universal Remote", version="0.3.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
@@ -79,12 +81,24 @@ async def connect_device(device_id: str):
 
 @app.post("/api/command")
 async def command(request: CommandRequest):
-    device = registry.devices.get(request.device)
+    volume_commands = {
+        "volume_up",
+        "volume_down",
+        "mute",
+    }
+
+    target_device_id = (
+        "roku"
+        if request.command in volume_commands
+        else request.device
+    )
+
+    device = registry.devices.get(target_device_id)
 
     if not device:
         raise HTTPException(
             status_code=404,
-            detail=f"Unknown device: {request.device}",
+            detail=f"Unknown device: {target_device_id}",
         )
 
     try:
@@ -93,11 +107,21 @@ async def command(request: CommandRequest):
             request.value,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
 
-    return {"ok": True, "result": result}
+    return {
+        "ok": True,
+        "device": target_device_id,
+        "result": result,
+    }
 
 
 @app.get("/api/devices/{device_id}/inputs")
@@ -173,6 +197,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sd_manifest_hash(files: list[dict[str, Any]]) -> str:
+    """
+    Build a deterministic hash for the complete SD content manifest.
+
+    The hash changes when a managed file is added, removed, renamed, resized,
+    or its contents change.
+    """
+    digest = hashlib.sha256()
+
+    for item in files:
+        digest.update(item["path"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(item["size"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(item["sha256"].encode("ascii"))
+        digest.update(b"\n")
+
+    return digest.hexdigest()
+
+
 @app.get("/api/firmware/manifest")
 async def firmware_manifest():
     """
@@ -243,6 +287,7 @@ async def firmware_status():
         "version": _read_firmware_version(),
     }
 
+
 @app.get("/api/devices/{device_id}/status")
 async def device_status(device_id: str):
     device = registry.devices.get(device_id)
@@ -258,6 +303,88 @@ async def device_status(device_id: str):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+
 @app.on_event("shutdown")
 async def shutdown_devices():
     await registry.disconnect_all()
+
+
+@app.get("/api/firmware/sd/manifest")
+async def sd_firmware_manifest():
+    """
+    Dynamically build a manifest from everything under Firmware/sd/.
+
+    No manually maintained manifest/version file is required. The returned
+    manifest_sha256 is deterministic and lets the ESP32 skip all per-file SD
+    hashing when nothing on the server has changed.
+    """
+
+    # Missing/unmounted server storage is NOT treated as an authoritative empty
+    # manifest. Returning an error prevents clients from deleting local content.
+    if not SD_FIRMWARE_DIR.exists() or not SD_FIRMWARE_DIR.is_dir():
+        raise HTTPException(
+            status_code=503,
+            detail="SD firmware directory is unavailable",
+        )
+
+    files: list[dict[str, Any]] = []
+
+    for path in sorted(SD_FIRMWARE_DIR.rglob("*")):
+        if not path.is_file():
+            continue
+
+        relative = path.relative_to(SD_FIRMWARE_DIR)
+        relative_string = relative.as_posix()
+        stat = path.stat()
+
+        files.append({
+            "path": f"/content/{relative_string}",
+            "url": f"/api/firmware/sd/download/{relative_string}",
+            "size": stat.st_size,
+            "sha256": _sha256(path),
+        })
+
+    return {
+        "valid": True,
+        "manifest_sha256": _sd_manifest_hash(files),
+        "files": files,
+    }
+
+
+@app.get("/api/firmware/sd/download/{file_path:path}")
+async def sd_firmware_download(file_path: str):
+    """
+    Download a file from Firmware/sd/ while preventing path traversal.
+    """
+
+    root = SD_FIRMWARE_DIR.resolve()
+
+    requested = (
+        SD_FIRMWARE_DIR / file_path
+    ).resolve()
+
+    try:
+        requested.relative_to(root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid SD file path",
+        )
+
+    if (
+        not requested.exists() or
+        not requested.is_file()
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="SD file not found",
+        )
+
+    return FileResponse(
+        requested,
+        media_type="application/octet-stream",
+        filename=requested.name,
+        headers={
+            "Cache-Control": "no-store",
+        },
+    )
