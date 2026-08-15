@@ -12,8 +12,8 @@
 #include "sd_storage.h"
 #include "sd_updater.h"
 #include "audio_player.h"
-
-#define PWR_KEY_PIN      6
+#include "sound_effects.h"
+#define PWR_KEY_PIN 6
 #define PWR_CONTROL_PIN  7
 #define BAT_ADC_PIN      8
 
@@ -22,6 +22,11 @@ Preferences prefs;
 bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
 bool wasTouching = false;
 bool screenSleeping = false;
+bool soundTestActive = false;
+bool findRemoteActive = false;
+uint32_t lastRemoteCommandPoll = 0;
+static constexpr uint32_t REMOTE_COMMAND_POLL_INTERVAL_MS = 5000;
+size_t soundTestIndex = 0;
 
 uint32_t lastWifiAttempt = 0;
 uint32_t lastUpdateCheck = 0;
@@ -42,6 +47,33 @@ bool haveLastImu = false;
 float lastImuX = 0.0f;
 float lastImuY = 0.0f;
 float lastImuZ = 0.0f;
+bool battery30WarningPlayed = false;
+bool battery20WarningPlayed = false;
+bool battery10WarningPlayed = false;
+bool lowBatteryShutdownPending = false;
+void serviceLowBatteryShutdown();
+void serviceSoundTest();
+void startSoundTest();
+void primeImuBaseline();
+bool imuWakeMotionDetected();
+void startFindRemote();
+
+const char* SOUND_TEST_FILES[] = {
+    "/content/hell-yeah-brother.wav",
+    "/content/i-have-some-new-tricks.wav",
+    "/content/im-getting-really-sleepy.wav",
+    "/content/im-shutting-down.wav",
+    "/content/my-battery-is-dangerously-low.wav",
+    "/content/oh-bloody-hell-can-you-please-stop.wav",
+    "/content/oh-bloody-hell.wav",
+    "/content/pc.wav",
+    "/content/roku.wav",
+    "/content/starting-up.wav",
+    "/content/supercalafragalisticexbealladocious.wav"
+};
+
+constexpr size_t SOUND_TEST_COUNT =
+    sizeof(SOUND_TEST_FILES) / sizeof(SOUND_TEST_FILES[0]);
 
 enum class ScreenMode { Home, Settings };
 ScreenMode currentScreen = ScreenMode::Home;
@@ -79,6 +111,39 @@ bool connectWifi() {
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
     return true;
 }
+void checkBatterySounds(uint8_t percent) {
+    if (percent >= 40) {
+        battery30WarningPlayed = false;
+        battery20WarningPlayed = false;
+        battery10WarningPlayed = false;
+        return;
+    }
+
+    if (percent <= 10 && !battery10WarningPlayed) {
+        battery10WarningPlayed = true;
+        battery20WarningPlayed = true;
+        battery30WarningPlayed = true;
+
+        playSoundEffect(SoundEffect::Battery10);
+        lowBatteryShutdownPending = true;
+        return;
+    }
+
+    if (percent <= 20 && !battery20WarningPlayed) {
+        battery20WarningPlayed = true;
+        battery30WarningPlayed = true;
+
+        playSoundEffect(SoundEffect::Battery20);
+        return;
+    }
+
+    if (percent <= 30 && !battery30WarningPlayed) {
+        battery30WarningPlayed = true;
+
+        playSoundEffect(SoundEffect::Battery30);
+    }
+}
+
 
 float readBatteryVoltage() {
     uint32_t totalMv = 0;
@@ -112,6 +177,76 @@ uint8_t readBatteryPercent() {
 void refreshBatteryStatus() {
     updateBatteryStatus(readBatteryPercent());
     lastBatteryUpdate = millis();
+    checkBatterySounds(readBatteryPercent());
+}
+
+
+void serviceRemoteCommands() {
+    uint32_t now = millis();
+
+    if (
+        now - lastRemoteCommandPoll <
+        REMOTE_COMMAND_POLL_INTERVAL_MS
+    ) {
+        return;
+    }
+
+    lastRemoteCommandPoll = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+
+    String command;
+
+    if (!checkRemoteCommand(command)) {
+        return;
+    }
+
+    if (command.length() == 0) {
+        return;
+    }
+
+    Serial.printf(
+        "Remote API: received command: %s\n",
+        command.c_str()
+    );
+
+    if (command == "find_remote") {
+        startFindRemote();
+    }
+}
+
+void startFindRemote() {
+    if (findRemoteActive) {
+        return;
+    }
+
+    Serial.println("Find Remote: activated");
+
+    findRemoteActive = true;
+    primeImuBaseline();
+
+    setAudioVolume(MAX_VOLUME);
+    playWav("/content/findme.wav");
+}
+
+void serviceFindRemote(bool motionDetected) {
+    if (!findRemoteActive) {
+        return;
+    }
+
+    if (motionDetected) {
+        Serial.println("Find Remote: pickup detected");
+
+        findRemoteActive = false;
+        setAudioVolume(DEFAULT_VOLUME);
+        return;
+    }
+
+    if (!isAudioPlaying()) {
+        playWav("/content/findme.wav");
+    }
 }
 
 void showHome() {
@@ -226,6 +361,7 @@ void checkUpdate(bool install) {
     auto result = OtaClient::check(install);
     Serial.print("OTA: ");
     Serial.println(result.message);
+    
 }
 
 void serialConsole() {
@@ -270,6 +406,7 @@ void handleHomeTap(uint16_t x, uint16_t y) {
     }
 
     if (x >= 8 && x <= 116 && y >= 36 && y <= 66) {
+        playSoundEffect(SoundEffect::PcSelected);
         selectedDevice = RemoteDevice::PC;
         Serial.println("UI: selected PC");
         updateDeviceSelector(true);
@@ -277,6 +414,7 @@ void handleHomeTap(uint16_t x, uint16_t y) {
     }
 
     if (x >= 124 && x <= 232 && y >= 36 && y <= 66) {
+        playSoundEffect(SoundEffect::RokuSelected);
         selectedDevice = RemoteDevice::Roku;
         Serial.println("UI: selected Roku");
         updateDeviceSelector(false);
@@ -380,6 +518,16 @@ void handleSettingsTap(uint16_t x, uint16_t y) {
         Serial.printf("UI: sleep timer = %u sec\n", uiSleepSeconds);
         return;
     }
+    // Play Sounds
+    if (
+        x >= 20 &&
+        x <= 220 &&
+        y >= 265 &&
+        y <= 305
+)   {
+    startSoundTest();
+    return;
+}
 }
 
 void setup() {
@@ -423,19 +571,33 @@ initAudio();
 void loop() {
     serialConsole();
     serviceAudio();
+    serviceRemoteCommands();
+
     RemoteTouchPoint point = readTouch();
     uint32_t now = millis();
 
+    bool imuMotion = false;
+
+    if (
+        findRemoteActive ||
+        (
+            screenSleeping &&
+            now - sleepStartedAt >= IMU_WAKE_GRACE_MS
+        )
+    ) {
+        imuMotion = imuWakeMotionDetected();
+    }
+
+    serviceFindRemote(imuMotion);
+    serviceSoundTest();
+    serviceLowBatteryShutdown();
     if (screenSleeping) {
-        if (point.touched) {
-            wakeScreen("touch");
-            wasTouching = true;
-        } else if (
-            now - sleepStartedAt >= IMU_WAKE_GRACE_MS &&
-            imuWakeMotionDetected()
-        ) {
-            wakeScreen("motion");
-        }
+    if (point.touched) {
+        wakeScreen("touch");
+        wasTouching = true;
+    } else if (imuMotion) {
+        wakeScreen("motion");
+    }
 
         if (!point.touched) {
             wasTouching = false;
@@ -492,4 +654,76 @@ if (
     }
 
     delay(5);
+}
+void serviceLowBatteryShutdown() {
+    if (!lowBatteryShutdownPending) {
+        return;
+    }
+
+    // Let serviceAudio() finish playing the shutdown message.
+    if (isAudioPlaying()) {
+        return;
+    }
+
+    Serial.println("Battery critical: shutting down");
+
+    lowBatteryShutdownPending = false;
+
+    // Turn off display first.
+    setDisplayBrightness(0);
+
+    delay(100);
+
+    // Release the board's power latch.
+    digitalWrite(PWR_CONTROL_PIN, LOW);
+
+    // We should never get here if power actually shuts off.
+    while (true) {
+        delay(1000);
+    }
+}
+void startSoundTest() {
+    if (soundTestActive) {
+        return;
+    }
+
+    Serial.println("Audio: starting sound test");
+
+    soundTestActive = true;
+    soundTestIndex = 0;
+
+    playWav(
+        SOUND_TEST_FILES[soundTestIndex]
+    );
+}
+
+void serviceSoundTest() {
+    if (!soundTestActive) {
+        return;
+    }
+
+    if (isAudioPlaying()) {
+        return;
+    }
+
+    soundTestIndex++;
+
+    if (soundTestIndex >= SOUND_TEST_COUNT) {
+        soundTestActive = false;
+
+        Serial.println(
+            "Audio: sound test complete"
+        );
+
+        return;
+    }
+
+    Serial.printf(
+        "Audio: playing %s\n",
+        SOUND_TEST_FILES[soundTestIndex]
+    );
+
+    playWav(
+        SOUND_TEST_FILES[soundTestIndex]
+    );
 }

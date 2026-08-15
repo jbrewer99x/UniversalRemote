@@ -454,17 +454,32 @@ void displaySettings(
         COLOR_WHITE
     );
 
-    // Future settings
-    drawText(14, 198, "WiFi", 0x8410, 1);
-    drawText(14, 220, "Bluetooth", 0x8410, 1);
+    // Play Sounds button
+    fillRect(
+    20,
+    265,
+    200,
+    40,
+    0x18E3
+);
 
-    drawText(
-        14,
-        286,
-        "Universal Remote 0.1.7",
-        0x8410,
-        1
-    );
+drawText(
+    83,
+    280,
+    "Play Sounds",
+    COLOR_WHITE,
+    1
+);
+String footer =
+    "Universal Remote " +
+    String(RemoteConfig::FIRMWARE_VERSION);
+  drawText(
+    14,
+    310,
+    footer.c_str(),
+    0x8410,
+    1
+);
 }
 void updateBrightnessSlider(uint8_t brightnessPercent) {
     // Clear only the dynamic brightness area

@@ -11,9 +11,6 @@
 
 static Audio audio;
 
-static constexpr uint8_t DEFAULT_VOLUME = 12;
-static constexpr uint8_t MAX_VOLUME = 21;
-
 bool initAudio() {
     Serial.println("Audio: initializing");
 
@@ -90,4 +87,10 @@ void setAudioVolume(uint8_t volume) {
 
 bool isAudioPlaying() {
     return audio.isRunning();
+}
+void stopAudio() {
+    if (audio.isRunning()) {
+        audio.stopSong();
+        Serial.println("Audio: stopped");
+    }
 }

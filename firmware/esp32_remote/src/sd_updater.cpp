@@ -11,7 +11,8 @@
 #include "sd_storage.h"
 #include "secrets.h"
 #include "config.h"
-
+#include "audio_player.h"
+#include "sound_effects.h"
 namespace {
 
 static uint8_t sdIoBuffer[1024];
@@ -870,7 +871,11 @@ bool check() {
             checked,
             updated
         );
-
+        if (updated > 0) {
+            playSoundEffect(
+                SoundEffect::NewFilesLoaded
+    );
+}
         return false;
     }
 

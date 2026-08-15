@@ -62,3 +62,63 @@ bool sendRemoteCommand(
 
     return ok;
 }
+
+bool checkRemoteCommand(String &command) {
+    command = "";
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Remote API poll: skipped, Wi-Fi disconnected");
+        return false;
+    }
+
+    HTTPClient http;
+
+    String url =
+        String(REMOTE_SERVER_URL) +
+        "/api/remote/command";
+
+
+    if (!http.begin(url)) {
+        Serial.println("Remote API poll: HTTP begin failed");
+        return false;
+    }
+
+    int status = http.GET();
+
+
+    if (status < 200 || status >= 300) {
+        http.end();
+        return false;
+    }
+
+    String body = http.getString();
+
+
+    http.end();
+
+    JsonDocument doc;
+
+    DeserializationError error =
+        deserializeJson(doc, body);
+
+    if (error) {
+        Serial.printf(
+            "Remote API poll: invalid JSON: %s\n",
+            error.c_str()
+        );
+        return false;
+    }
+
+    const char *value = doc["command"];
+
+    if (value != nullptr) {
+        command = value;
+
+        Serial.printf(
+            "Remote API poll: command = %s\n",
+            command.c_str()
+        );
+    } 
+
+    return true;
+}

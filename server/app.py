@@ -24,6 +24,7 @@ FIRMWARE_FILE = os.getenv("FIRMWARE_FILE", "universal-remote.bin")
 FIRMWARE_VERSION_FILE = os.getenv("FIRMWARE_VERSION_FILE", "version.txt")
 
 SD_FIRMWARE_DIR = FIRMWARE_DIR / "sd"
+pending_remote_command: str | None = None
 
 app = FastAPI(title="Universal Remote", version="0.3.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -388,3 +389,23 @@ async def sd_firmware_download(file_path: str):
             "Cache-Control": "no-store",
         },
     )
+@app.post("/api/remote/find")
+async def find_remote():
+    global pending_remote_command
+
+    pending_remote_command = "find_remote"
+
+    return {
+        "ok": True,
+        "command": pending_remote_command,
+    }
+@app.get("/api/remote/command")
+async def get_remote_command():
+    global pending_remote_command
+
+    command = pending_remote_command
+    pending_remote_command = None
+
+    return {
+        "command": command
+    }

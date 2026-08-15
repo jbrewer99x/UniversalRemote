@@ -57,6 +57,17 @@ button { font: inherit; }
 .actionButton { padding: 9px 12px; margin-top: 14px; }
 .fullWidth { width: 100%; }
 
+.findRemoteButton {
+    border-color: #ffca68;
+    color: #ffca68;
+    font-weight: 700;
+}
+
+.findRemoteButton:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 .inputGrid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
@@ -121,6 +132,11 @@ button { font: inherit; }
     #device-card h2,
     #device-card .metric:not(:first-of-type),
     #connectButton { display: none; }
+
+    #findRemoteButton {
+        display: block;
+        margin-top: 10px;
+    }
 
     #device-card .metric:first-of-type {
         display: block;

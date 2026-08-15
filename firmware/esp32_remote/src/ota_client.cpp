@@ -7,6 +7,8 @@
 #include <mbedtls/sha256.h>
 #include "config.h"
 #include "secrets.h"
+#include "sound_effects.h"
+#include "audio_player.h"
 
 namespace {
 String joinUrl(String base, const String& path) {
@@ -202,6 +204,12 @@ Status check(bool installIfAvailable) {
     s.result = Result::UpdateAvailable;
     s.message = "Update available: " + s.currentVersion + " -> " + ver;
     if (!installIfAvailable) return s;
+    playSoundEffect(SoundEffect::UpdateStarting);
+    while (isAudioPlaying()) {
+    serviceAudio();
+    delay(5);
+}
+    
 
     String error;
     if (!install(joinUrl(String(REMOTE_SERVER_URL), path), size, hash, error)) {

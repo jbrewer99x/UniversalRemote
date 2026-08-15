@@ -10,6 +10,7 @@ const powerStatus = document.getElementById("powerStatus");
 const inputStatus = document.getElementById("inputStatus");
 const volumeStatus = document.getElementById("volumeStatus");
 const connectButton = document.getElementById("connectButton");
+const findRemoteButton = document.getElementById("findRemoteButton");
 const message = document.getElementById("message");
 const headerStatus = document.getElementById("status");
 
@@ -195,6 +196,25 @@ function sendCommand(command) {
     });
 }
 
+async function findRemote() {
+    if (!findRemoteButton) return;
+
+    findRemoteButton.disabled = true;
+    setMessage("Finding remote...");
+
+    try {
+        await api("/api/remote/find", {
+            method: "POST"
+        });
+
+        setMessage("Find Remote activated");
+    } catch (error) {
+        setMessage(`Error: ${error.message}`);
+    } finally {
+        findRemoteButton.disabled = false;
+    }
+}
+
 async function connectDevice() {
     if (!currentDevice) return;
     const selected = currentDevice;
@@ -214,6 +234,7 @@ document.querySelectorAll("[data-command]").forEach(button => {
     button.addEventListener("click", () => sendCommand(button.dataset.command));
 });
 connectButton.addEventListener("click", connectDevice);
+findRemoteButton.addEventListener("click", findRemote);
 deviceSelect.addEventListener("change", () => selectDevice(deviceSelect.value));
 setInterval(() => refreshSelectedStatus(), 5000);
 loadDevices();
