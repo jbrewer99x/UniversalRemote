@@ -48,9 +48,13 @@ bool playSoundEffect(SoundEffect effect) {
         case SoundEffect::Supercalifragilistic:
             path = "/content/supercalafragalisticexbealladocious.wav";
             break;
-            
+
         case SoundEffect::NewFilesLoaded:
             path = "/content/new-files-loaded.wav";
+            break;
+
+        case SoundEffect::Sleeping:
+            path = "/content/going-to-sleep.wav";
             break;
     }
 

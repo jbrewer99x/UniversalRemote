@@ -1,8 +1,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
-#include <esp_sleep.h>
-#include <driver/gpio.h>
 
 #include "config.h"
 #include "ota_client.h"
@@ -18,7 +16,6 @@
 #define PWR_KEY_PIN 6
 #define PWR_CONTROL_PIN  7
 #define BAT_ADC_PIN      8
-#define TOUCH_WAKE_PIN   4
 
 Preferences prefs;
 
@@ -42,12 +39,9 @@ uint8_t uiBrightness = 75;
 uint16_t uiSleepSeconds = 30;
 
 static constexpr uint32_t BATTERY_UPDATE_INTERVAL_MS = 30000;
-// 4 Hz pickup polling while the screen is off.
-static constexpr uint32_t IMU_CHECK_INTERVAL_MS = 250;
+static constexpr uint32_t IMU_CHECK_INTERVAL_MS = 100;
 static constexpr uint32_t IMU_WAKE_GRACE_MS = 750;
 static constexpr float IMU_WAKE_THRESHOLD_G = 0.12f;
-// Preserve screen-off + IMU wake for one hour before true light sleep.
-static constexpr uint32_t LIGHT_SLEEP_AFTER_MS = 60UL * 60UL * 1000UL;
 
 bool haveLastImu = false;
 float lastImuX = 0.0f;
@@ -310,56 +304,6 @@ void wakeScreen(const char* reason) {
 
     Serial.printf("Sleep: woke by %s\n", reason);
     primeImuBaseline();
-}
-
-
-void enterLightSleep() {
-    if (!screenSleeping) return;
-
-    if (findRemoteActive || soundTestActive || isAudioPlaying()) {
-        return;
-    }
-
-    Serial.println("Sleep: 60 minutes idle; entering ESP32 light sleep");
-    playSoundEffect(SoundEffect::Sleeping);
-
-// Give playback time to finish before light sleep.
-// Adjust if the WAV is longer.
-while (isAudioPlaying()) {
-    delay(20);
-}
-
-    WiFi.disconnect(false, false);
-    WiFi.mode(WIFI_OFF);
-    delay(30);
-
-    pinMode(TOUCH_WAKE_PIN, INPUT_PULLUP);
-    gpio_wakeup_enable(
-        (gpio_num_t)TOUCH_WAKE_PIN,
-        GPIO_INTR_LOW_LEVEL
-    );
-    esp_sleep_enable_gpio_wakeup();
-
-    Serial.println("Sleep: light sleep armed; touch screen to wake");
-    Serial.flush();
-
-    esp_err_t sleepResult = esp_light_sleep_start();
-
-    gpio_wakeup_disable((gpio_num_t)TOUCH_WAKE_PIN);
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-
-    if (sleepResult != ESP_OK) {
-        Serial.printf(
-            "Sleep: esp_light_sleep_start failed: %d",
-            (int)sleepResult
-        );
-    } else {
-        Serial.println("Sleep: woke from light sleep");
-    }
-
-    lastWifiAttempt = 0;
-    connectWifi();
-    wakeScreen("touch/light sleep");
 }
 
 bool imuWakeMotionDetected() {
@@ -658,12 +602,6 @@ void loop() {
         if (!point.touched) {
             wasTouching = false;
         }
-
-        // After a full hour without activity, enter true light sleep.
-        if (screenSleeping && now - lastActivityAt >= LIGHT_SLEEP_AFTER_MS) {
-            enterLightSleep();
-            now = millis();
-        }
     } else {
         if (point.touched) {
             noteActivity();
@@ -715,8 +653,7 @@ if (
         refreshBatteryStatus();
     }
 
-    // Slower loop while the display is dark.
-    delay(screenSleeping ? 20 : 5);
+    delay(5);
 }
 void serviceLowBatteryShutdown() {
     if (!lowBatteryShutdownPending) {

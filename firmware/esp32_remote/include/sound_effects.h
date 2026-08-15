@@ -15,7 +15,7 @@ enum class SoundEffect {
 
     BloodyHell,
     PleaseStop,
-
+    Sleeping,
     Supercalifragilistic
 };
 
