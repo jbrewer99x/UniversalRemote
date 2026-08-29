@@ -56,7 +56,7 @@ String digestHex(const uint8_t d[32]) {
 bool install(const String& url, size_t expectedSize, const String& expectedHash, String& error) {
     HTTPClient http;
     http.setConnectTimeout(RemoteConfig::HTTP_CONNECT_TIMEOUT_MS);
-    http.setTimeout(RemoteConfig::HTTP_REQUEST_TIMEOUT_MS);
+    http.setTimeout(RemoteConfig::HTTP_CONNECT_TIMEOUT_MS);
     if (!http.begin(url)) { error = "Cannot initialize firmware request"; return false; }
 
     int code = http.GET();
@@ -95,7 +95,7 @@ bool install(const String& url, size_t expectedSize, const String& expectedHash,
     while (http.connected() && total < totalSize) {
         size_t avail = stream->available();
         if (!avail) {
-            if (millis() - lastData > RemoteConfig::HTTP_REQUEST_TIMEOUT_MS) {
+            if (millis() - lastData > RemoteConfig::HTTP_CONNECT_TIMEOUT_MS) {
                 error = "Firmware download timed out";
                 mbedtls_sha256_free(&sha);
                 Update.abort(); http.end(); return false;
@@ -165,7 +165,7 @@ Status check(bool installIfAvailable) {
     HTTPClient http;
     String manifest = joinUrl(String(REMOTE_SERVER_URL), RemoteConfig::OTA_MANIFEST_PATH);
     http.setConnectTimeout(RemoteConfig::HTTP_CONNECT_TIMEOUT_MS);
-    http.setTimeout(RemoteConfig::HTTP_REQUEST_TIMEOUT_MS);
+    http.setTimeout(RemoteConfig::HTTP_CONNECT_TIMEOUT_MS);
 
     if (!http.begin(manifest)) {
         s.message = "Cannot initialize manifest request"; return s;
@@ -219,7 +219,7 @@ Status check(bool installIfAvailable) {
     s.result = Result::Installed;
     s.message = "Installed " + ver + "; rebooting";
     Serial.println(s.message);
-    delay(1000);
+    delay(100);
     ESP.restart();
     return s;
 }

@@ -54,3 +54,6 @@ Thumbs.db
 *.bak
 *.save
 *.zip
+
+#Local Deployment
+scripts/*

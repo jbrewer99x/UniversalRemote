@@ -4,6 +4,6 @@ include/secrets.h
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
-
+deploy-firmware.ps1
 factory-backup.bin
 backup-hash.txt

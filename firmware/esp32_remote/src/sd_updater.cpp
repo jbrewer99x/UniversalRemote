@@ -225,7 +225,7 @@ bool downloadFile(
     );
 
     http.setTimeout(
-        RemoteConfig::HTTP_REQUEST_TIMEOUT_MS
+        RemoteConfig::HTTP_CONNECT_TIMEOUT_MS
     );
 
     if (!http.begin(url)) {
@@ -307,7 +307,7 @@ bool downloadFile(
         if (!available) {
             if (
                 millis() - lastData >
-                RemoteConfig::HTTP_REQUEST_TIMEOUT_MS
+                RemoteConfig::HTTP_CONNECT_TIMEOUT_MS
             ) {
                 Serial.println(
                     "SD Update: download timed out"
@@ -636,7 +636,7 @@ bool check() {
     );
 
     http.setTimeout(
-        RemoteConfig::HTTP_REQUEST_TIMEOUT_MS
+        RemoteConfig::HTTP_CONNECT_TIMEOUT_MS
     );
 
     if (!http.begin(manifestUrl)) {

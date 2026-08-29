@@ -18,7 +18,8 @@
 #define PWR_KEY_PIN 6
 #define PWR_CONTROL_PIN  7
 #define BAT_ADC_PIN      8
-#define TOUCH_WAKE_PIN   4
+#define WAKE_TOUCH_PIN   4
+#define WAKE_BUTTON_PIN 18
 
 Preferences prefs;
 
@@ -314,52 +315,73 @@ void wakeScreen(const char* reason) {
 
 
 void enterLightSleep() {
-    if (!screenSleeping) return;
-
     if (findRemoteActive || soundTestActive || isAudioPlaying()) {
         return;
     }
 
-    Serial.println("Sleep: 60 minutes idle; entering ESP32 light sleep");
+    if (!screenSleeping) {
+        screenSleeping = true;
+        setDisplayBrightness(0);
+    }
+
+    Serial.println("Sleep: entering ESP32 light sleep");
+
     playSoundEffect(SoundEffect::Sleeping);
 
-// Give playback time to finish before light sleep.
-// Adjust if the WAV is longer.
-while (isAudioPlaying()) {
-    delay(20);
-}
+    // If playSoundEffect() is asynchronous, wait for it to finish here.
+    while (isAudioPlaying()) {
+        delay(20);
+    }
 
     WiFi.disconnect(false, false);
     WiFi.mode(WIFI_OFF);
+
     delay(30);
 
-    pinMode(TOUCH_WAKE_PIN, INPUT_PULLUP);
-    gpio_wakeup_enable(
-        (gpio_num_t)TOUCH_WAKE_PIN,
-        GPIO_INTR_LOW_LEVEL
-    );
-    esp_sleep_enable_gpio_wakeup();
+    pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
 
-    Serial.println("Sleep: light sleep armed; touch screen to wake");
-    Serial.flush();
+// Wait for the sleep-button press to be fully released first.
+while (digitalRead(WAKE_BUTTON_PIN) == LOW) {
+    delay(10);
+}
 
-    esp_err_t sleepResult = esp_light_sleep_start();
+gpio_wakeup_enable(
+    (gpio_num_t)WAKE_BUTTON_PIN,
+    GPIO_INTR_LOW_LEVEL
+);
 
-    gpio_wakeup_disable((gpio_num_t)TOUCH_WAKE_PIN);
+esp_err_t wakeEnableResult = esp_sleep_enable_gpio_wakeup();
+
+Serial.printf(
+    "GPIO18 before sleep=%d, wakeEnable=%d\n",
+    digitalRead(WAKE_BUTTON_PIN),
+    (int)wakeEnableResult
+);
+
+Serial.flush();
+
+esp_err_t sleepResult = esp_light_sleep_start();
+
+    gpio_wakeup_disable((gpio_num_t)WAKE_BUTTON_PIN);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
 
     if (sleepResult != ESP_OK) {
         Serial.printf(
-            "Sleep: esp_light_sleep_start failed: %d",
+            "Sleep: esp_light_sleep_start failed: %d\n",
             (int)sleepResult
         );
     } else {
         Serial.println("Sleep: woke from light sleep");
     }
 
+    // Don't let the wake press immediately trigger another sleep command.
+    while (digitalRead(WAKE_BUTTON_PIN) == LOW) {
+        delay(10);
+    }
+
     lastWifiAttempt = 0;
     connectWifi();
-    wakeScreen("touch/light sleep");
+    wakeScreen("power button");
 }
 
 bool imuWakeMotionDetected() {
@@ -589,7 +611,7 @@ void handleSettingsTap(uint16_t x, uint16_t y) {
 void setup() {
     pinMode(PWR_CONTROL_PIN, OUTPUT);
     digitalWrite(PWR_CONTROL_PIN, HIGH);
-
+    pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
     Serial.begin(115200);
     delay(1000);
 
@@ -633,7 +655,16 @@ void loop() {
     uint32_t now = millis();
 
     bool imuMotion = false;
+static bool wakeButtonWasDown = false;
 
+bool wakeButtonDown = digitalRead(WAKE_BUTTON_PIN) == LOW;
+
+if (wakeButtonDown && !wakeButtonWasDown) {
+    Serial.println("Power button: entering light sleep");
+    enterLightSleep();
+}
+
+wakeButtonWasDown = wakeButtonDown;
     if (
         findRemoteActive ||
         (
