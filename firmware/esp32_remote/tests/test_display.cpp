@@ -62,6 +62,24 @@ int main(int argc, char**) {
         step(false, control.x, control.y);
         expectEmpty();
     }
+    displayLights();
+    assert(isLightsScreenActive());
+    step(false, 0, 0);
+    const Control lightsControls[] = {{60, 64, "govee_on"}, {180, 64, "govee_off"},
+        {50, 231, "govee_warm"}, {122, 231, "govee_cool"}, {192, 231, "govee_red"},
+        {50, 271, "govee_green"}, {122, 271, "govee_blue"}, {192, 271, "govee_party"},
+        {120, 301, "govee_crazy_toggle"}};
+    for (const auto &control : lightsControls) {
+        step(true, control.x, control.y);
+        expectAction(control.name);
+        step(false, control.x, control.y);
+        expectEmpty();
+    }
+    step(true, 30, 18);
+    expectAction("show_home");
+    step(false, 30, 18);
+    expectEmpty();
+    displayStatus(true, "", "", true);
     const size_t before = testTransferredPixels;
     step(false, 0, 0, 100);
     assert(testTransferredPixels == before); // idle screen does not redraw

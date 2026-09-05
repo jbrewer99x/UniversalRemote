@@ -15,8 +15,10 @@ constexpr uint32_t TEXT = 0xEDF2F7, MUTED = 0xA3B2C2, ACCENT = 0x67DF9A;
 SPIClass lcdSPI(FSPI);
 lv_display_t* display = nullptr;
 lv_indev_t* input = nullptr;
-lv_obj_t *home, *settings, *wifi, *battery, *pc, *roku;
-lv_obj_t *brightnessSlider, *sleepSlider, *brightnessValue, *sleepValue, *updateMessage, *feedback;
+lv_obj_t *home, *settings, *lights, *wifi, *battery, *pc, *roku;
+lv_obj_t *brightnessSlider, *sleepSlider, *brightnessValue, *sleepValue;
+lv_obj_t *lightBrightnessSlider, *lightTemperatureSlider, *lightBrightnessValue, *lightTemperatureValue;
+lv_obj_t *updateMessage, *feedback;
 bool ready = false, touchDown = false;
 bool panelSleeping = false, sleepRequested = false;
 uint32_t lastSleepOutAt = 0;
@@ -88,7 +90,10 @@ void sliderEvent(lv_event_t* event) {
     const char* name = static_cast<const char*>(lv_event_get_user_data(event));
     if (code == LV_EVENT_VALUE_CHANGED) {
         auto* slider = static_cast<lv_obj_t*>(lv_event_get_target(event));
-        enqueue(name, lv_slider_get_value(slider));
+        const int value = lv_slider_get_value(slider);
+        enqueue(name, value);
+        if (!strcmp(name, "govee_brightness")) lv_label_set_text_fmt(lightBrightnessValue, "%d%%", value);
+        else if (!strcmp(name, "govee_temperature")) lv_label_set_text_fmt(lightTemperatureValue, "%dK", value);
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) enqueue("save_settings");
 }
 lv_obj_t* label(lv_obj_t* parent, const char* text, int x, int y, int width,
@@ -115,9 +120,11 @@ lv_obj_t* button(lv_obj_t* parent, int x, int y, int w, int h,
     lv_obj_set_style_pad_all(obj, 0, 0);
     lv_obj_set_style_bg_color(obj, lv_color_hex(0x466253), LV_STATE_PRESSED);
     lv_obj_set_style_border_color(obj, lv_color_hex(ACCENT), LV_STATE_PRESSED);
-    auto* caption = label(obj, text, 0, 0, w - 4);
-    lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(caption);
+    if (text && text[0] != '\0') {
+        auto* caption = label(obj, text, 0, 0, w - 4);
+        lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(caption);
+    }
     lv_obj_add_event_cb(obj, buttonEvent, LV_EVENT_PRESSED, const_cast<char*>(action));
     return obj;
 }
@@ -198,6 +205,29 @@ void createScreens() {
     auto* footer = label(settings, "Universal Remote " , 14, 308, 226, &lv_font_montserrat_10);
     lv_label_set_text_fmt(footer, "Universal Remote %s", RemoteConfig::FIRMWARE_VERSION);
     lv_obj_set_style_text_color(footer, lv_color_hex(MUTED), 0);
+
+    lights = screen();
+    button(lights, 0, 0, 74, 36, LV_SYMBOL_LEFT " Back", "show_home");
+    label(lights, "Govee Lights", 95, 10, 145, &lv_font_montserrat_14);
+    button(lights, 10, 46, 100, 36, LV_SYMBOL_POWER " On", "govee_on");
+    button(lights, 130, 46, 100, 36, LV_SYMBOL_POWER " Off", "govee_off");
+    label(lights, "Brightness", 14, 96, 120);
+    lightBrightnessValue = label(lights, "50%", 180, 96, 46);
+    lv_obj_set_style_text_align(lightBrightnessValue, LV_TEXT_ALIGN_RIGHT, 0);
+    lightBrightnessSlider = slider(lights, 122, 0, 100, "govee_brightness");
+    label(lights, "Temp", 14, 156, 70);
+    lightTemperatureValue = label(lights, "4000K", 160, 156, 66);
+    lv_obj_set_style_text_align(lightTemperatureValue, LV_TEXT_ALIGN_RIGHT, 0);
+    lightTemperatureSlider = slider(lights, 182, 1000, 10000, "govee_temperature");
+    button(lights, 16, 214, 68, 34, "Warm", "govee_warm");
+    button(lights, 88, 214, 68, 34, "Cool", "govee_cool");
+    button(lights, 160, 214, 64, 34, "Red", "govee_red");
+    button(lights, 16, 254, 68, 34, "Green", "govee_green");
+    button(lights, 88, 254, 68, 34, "Blue", "govee_blue");
+    button(lights, 160, 254, 64, 34, "Party", "govee_party");
+    auto* crazy = button(lights, 16, 288, 208, 26, LV_SYMBOL_SHUFFLE " Crazy Mode", "govee_crazy_toggle");
+    lv_obj_set_style_bg_color(crazy, lv_color_hex(0x466253), 0);
+    lv_obj_set_style_border_color(crazy, lv_color_hex(ACCENT), 0);
 
     feedback = label(lv_layer_top(), "", 4, 2, 232, &lv_font_montserrat_12);
     lv_obj_set_style_bg_color(feedback, lv_color_hex(SURFACE), 0);
@@ -298,14 +328,30 @@ void displayStatus(bool connected, const String&, const String&, bool pcSelected
     if (!ready) return;
     suppressDisplayTouch();
     updateWifiStatus(connected); updateDeviceSelector(pcSelected);
-    lv_screen_load(home);
+    if (lv_screen_active() != home) lv_screen_load(home);
+    flushDisplay();
 }
 void displaySettings(uint8_t brightness, uint16_t sleep) {
     if (!ready) return;
     Power::uiActivity();
     suppressDisplayTouch();
     updateBrightnessSlider(brightness); updateSleepSlider(sleep);
-    lv_screen_load(settings);
+    if (lv_screen_active() != settings) lv_screen_load(settings);
+    flushDisplay();
+}
+void displayLights() {
+    if (!ready) return;
+    Power::uiActivity();
+    suppressDisplayTouch();
+    lv_slider_set_value(lightBrightnessSlider, 50, LV_ANIM_OFF);
+    lv_slider_set_value(lightTemperatureSlider, 4000, LV_ANIM_OFF);
+    lv_label_set_text(lightBrightnessValue, "50%");
+    lv_label_set_text(lightTemperatureValue, "4000K");
+    if (lv_screen_active() != lights) lv_screen_load(lights);
+    flushDisplay();
+}
+bool isLightsScreenActive() {
+    return ready && lv_screen_active() == lights;
 }
 void updateBrightnessSlider(uint8_t value) {
     if (!ready) return;
@@ -330,6 +376,7 @@ void updateBatteryStatus(uint8_t percent, float volts) {
     snprintf(text, sizeof(text), "%.2fV %s", double(volts), icon);
     lv_label_set_text(battery, text);
     lv_obj_set_style_text_color(battery, lv_color_hex(percent <= 20 ? 0xFF9393 : TEXT), 0);
+    flushDisplay();
 }
 void displayUpdateStatus(const char* message) {
     if (!ready) return;

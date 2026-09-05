@@ -31,6 +31,8 @@ void displaySettings(
     uint8_t brightnessPercent,
     uint16_t sleepSeconds
 );
+void displayLights();
+bool isLightsScreenActive();
 void displayUpdateStatus(const char* message);
 void updateBrightnessSlider(uint8_t brightnessPercent);
 void updateSleepSlider(uint16_t sleepSeconds);

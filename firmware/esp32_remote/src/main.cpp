@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
 #include <driver/gpio.h>
@@ -105,7 +107,7 @@ const char* SOUND_TEST_FILES[] = {
 constexpr size_t SOUND_TEST_COUNT =
     sizeof(SOUND_TEST_FILES) / sizeof(SOUND_TEST_FILES[0]);
 
-enum class ScreenMode { Home, Settings };
+enum class ScreenMode { Home, Settings, Lights };
 ScreenMode currentScreen = ScreenMode::Home;
 
 enum class RemoteDevice { PC, Roku };
@@ -245,6 +247,54 @@ void serviceFindRemote(bool motionDetected) {
     }
 }
 
+bool queueGoveeLightCommand(const char* command, int v1 = -1, int v2 = -1, int v3 = -1) {
+    if (WiFi.status() != WL_CONNECTED) {
+        displayFeedback("Wi-Fi offline. Try again.");
+        reportErrorSound();
+        return false;
+    }
+
+    HTTPClient http;
+    http.setConnectTimeout(1000);
+    http.setTimeout(2000);
+    http.setReuse(false);
+    if (!http.begin(String(REMOTE_SERVER_URL) + "/api/command")) {
+        displayFeedback("Govee request failed.");
+        reportErrorSound();
+        return false;
+    }
+
+    JsonDocument doc;
+    doc["device"] = "living_room_lights";
+    doc["command"] = command;
+
+    if (strcmp(command, "color") == 0 && v1 >= 0 && v2 >= 0 && v3 >= 0) {
+        JsonObject value = doc["value"].to<JsonObject>();
+        value["r"] = v1;
+        value["g"] = v2;
+        value["b"] = v3;
+    } else if (v1 >= 0) {
+        doc["value"] = v1;
+    }
+
+    String body;
+    serializeJson(doc, body);
+    http.addHeader("Content-Type", "application/json");
+    const int status = http.POST(body);
+    const bool ok = status >= 200 && status < 300;
+    http.end();
+
+    if (!ok) {
+        displayFeedback("Govee command failed.");
+        reportErrorSound();
+        return false;
+    }
+
+    const String feedback = String("Govee: ") + command;
+    displayFeedback(feedback.c_str());
+    return true;
+}
+
 void showHome() {
     saveSettings();
     wakeTouchGate.suppress();
@@ -255,6 +305,13 @@ void showHome() {
         "Ready",
         selectedDevice == RemoteDevice::PC
     );
+    refreshBatteryStatus();
+}
+
+void showLights() {
+    wakeTouchGate.suppress();
+    currentScreen = ScreenMode::Lights;
+    displayLights();
     refreshBatteryStatus();
 }
 
@@ -636,6 +693,51 @@ void serviceMaintenance() {
     noteActivity();
 }
 
+bool handleScreenSwipeGesture() {
+    static bool tracking = false;
+    static int startX = 0;
+    static int startY = 0;
+    static int lastX = 0;
+    static int lastY = 0;
+
+    RemoteTouchPoint point = readTouch();
+    if (point.touched) {
+        if (!tracking) {
+            tracking = true;
+            startX = point.x;
+            startY = point.y;
+            lastX = point.x;
+            lastY = point.y;
+        } else {
+            lastX = point.x;
+            lastY = point.y;
+        }
+        return false;
+    }
+
+    if (!tracking) {
+        return false;
+    }
+
+    const int dx = lastX - startX;
+    const int dy = lastY - startY;
+    const bool horizontal = abs(dx) > 70 && abs(dy) < 50;
+    tracking = false;
+    if (!horizontal) {
+        return false;
+    }
+
+    if (currentScreen == ScreenMode::Home && dx > 0 && startX < 90) {
+        showLights();
+        return true;
+    }
+    if (currentScreen == ScreenMode::Lights && dx < 0 && startX > 150) {
+        showHome();
+        return true;
+    }
+    return false;
+}
+
 void handleDisplayActions() {
     DisplayAction action;
     while (takeDisplayAction(action)) {
@@ -643,6 +745,7 @@ void handleDisplayActions() {
         noteActivity();
         if (!strcmp(name, "settings")) showSettings();
         else if (!strcmp(name, "show_home")) showHome();
+        else if (!strcmp(name, "show_lights")) showLights();
         else if (!strcmp(name, "pc") || !strcmp(name, "roku")) {
             const bool choosePc = !strcmp(name, "pc");
             selectedDevice = choosePc ? RemoteDevice::PC : RemoteDevice::Roku;
@@ -658,6 +761,17 @@ void handleDisplayActions() {
         } else if (!strcmp(name, "save_settings")) saveSettings();
         else if (!strcmp(name, "updates")) requestMaintenance(Maintenance::All);
         else if (!strcmp(name, "sounds")) startSoundTest();
+        else if (!strcmp(name, "govee_on")) queueGoveeLightCommand("power", 1);
+        else if (!strcmp(name, "govee_off")) queueGoveeLightCommand("power", 0);
+        else if (!strcmp(name, "govee_brightness")) queueGoveeLightCommand("brightness", action.value);
+        else if (!strcmp(name, "govee_temperature")) queueGoveeLightCommand("temperature", action.value);
+        else if (!strcmp(name, "govee_warm")) queueGoveeLightCommand("temperature", 3000);
+        else if (!strcmp(name, "govee_cool")) queueGoveeLightCommand("temperature", 6500);
+        else if (!strcmp(name, "govee_red")) queueGoveeLightCommand("color", 255, 0, 0);
+        else if (!strcmp(name, "govee_green")) queueGoveeLightCommand("color", 0, 255, 0);
+        else if (!strcmp(name, "govee_blue")) queueGoveeLightCommand("color", 0, 0, 255);
+        else if (!strcmp(name, "govee_party")) queueGoveeLightCommand("crazy_toggle");
+        else if (!strcmp(name, "govee_crazy_toggle")) queueGoveeLightCommand("crazy_toggle");
         else sendSelectedCommand(name);
     }
 }
@@ -739,6 +853,12 @@ void loop() {
     }
 
     RemoteTouchPoint point = readTouch();
+    if (!screenSleeping) {
+        const bool triggered = handleScreenSwipeGesture();
+        if (triggered) {
+            point = {false, 0, 0};
+        }
+    }
     uint32_t now = millis();
     const bool detectedMotion = imuWakeMotionDetected();
     const bool imuMotion = detectedMotion && (findRemoteActive ||
