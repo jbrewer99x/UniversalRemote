@@ -6,6 +6,7 @@ from devices.mock_lg import MockLGTV
 from devices.roku import RokuDevice
 from devices.onkyo import OnkyoReceiver
 from devices.bazzite import BazzitePC
+from devices.govee import GoveeLANGroup
 
 
 DRIVERS = {
@@ -14,6 +15,7 @@ DRIVERS = {
     "roku": RokuDevice,
     "onkyo": OnkyoReceiver,
     "bazzite": BazzitePC,
+    "govee_lan_group": GoveeLANGroup,
 }
 
 
@@ -52,6 +54,17 @@ class DeviceRegistry:
 
     def describe(self):
         return [device.describe() for device in self.devices.values()]
+    
+    async def start_all(self):
+            for device in self.devices.values():
+                try:
+                    start = getattr(device, "start", None)
+                    if start is not None:
+                        result = start()
+                        if hasattr(result, "__await__"):
+                            await result
+                except Exception as exc:
+                    print(f"Failed to start device {getattr(device, 'device_id', 'unknown')}: {exc}")
 
     async def disconnect_all(self):
         for device in self.devices.values():
@@ -59,3 +72,5 @@ class DeviceRegistry:
                 await device.disconnect()
             except Exception:
                 pass
+
+    

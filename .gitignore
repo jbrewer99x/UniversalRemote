@@ -54,6 +54,9 @@ Thumbs.db
 *.bak
 *.save
 *.zip
+backup/
 
 #Local Deployment
-scripts/*
+scripts/
+deploy/
+UniversalRemote.code-workspace

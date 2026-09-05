@@ -66,6 +66,76 @@
         </div>
     </section>
 
+
+    <section id="lights-card" class="card">
+        <h2>Living Room Lights</h2>
+
+        <div class="remoteGrid lightPowerGrid">
+            <button class="remoteButton lightOnButton" data-light-command="on">On</button>
+            <button class="remoteButton powerButton" data-light-command="off">Off</button>
+        </div>
+
+        <button id="crazyModeButton" class="remoteButton crazyModeButton fullWidth" type="button">Crazy Mode: OFF</button>
+
+        <h3>Brightness</h3>
+        <div class="lightPresetGrid">
+            <button class="remoteButton" data-light-command="brightness" data-light-value="10">10%</button>
+            <button class="remoteButton" data-light-command="brightness" data-light-value="25">25%</button>
+            <button class="remoteButton" data-light-command="brightness" data-light-value="50">50%</button>
+            <button class="remoteButton" data-light-command="brightness" data-light-value="75">75%</button>
+            <button class="remoteButton" data-light-command="brightness" data-light-value="100">100%</button>
+        </div>
+
+        <div class="lightSliderRow">
+            <input id="lightBrightness" type="range" min="1" max="100" value="50" aria-label="Light brightness">
+            <span id="lightBrightnessValue">50%</span>
+        </div>
+
+        <h3>White</h3>
+        <div class="lightPresetGrid lightWhiteGrid">
+            <button class="remoteButton" data-light-command="temperature" data-light-value="1800">Extra Warm</button>
+            <button class="remoteButton" data-light-command="temperature" data-light-value="2700">Warm</button>
+            <button class="remoteButton" data-light-command="temperature" data-light-value="4000">Neutral</button>
+            <button class="remoteButton" data-light-command="temperature" data-light-value="6500">Daylight</button>
+        </div>
+
+        <h3>Color</h3>
+        <div class="lightColorRow">
+            <input id="lightColor" type="color" value="#ff5500" aria-label="Light color">
+            <button id="setLightColor" class="remoteButton">Set Color</button>
+        </div>
+        <div class="lightPresetGrid lightColorPresets">
+            <button class="remoteButton colorPreset" data-light-color="#ff0000">Red</button>
+            <button class="remoteButton colorPreset" data-light-color="#00ff00">Green</button>
+            <button class="remoteButton colorPreset" data-light-color="#0000ff">Blue</button>
+            <button class="remoteButton colorPreset" data-light-color="#8000ff">Purple</button>
+        </div>
+    </section>
+
+
+    <section id="parental-controls-card" class="card">
+        <h2>Parental Controls</h2>
+        <div class="metric">
+            <span>Managed Device</span>
+            <select id="parentalDeviceSelect" aria-label="Select parental control device"></select>
+        </div>
+        <label class="metric" for="parentalEnabled">
+            <span>Schedule Enabled</span>
+            <input id="parentalEnabled" type="checkbox">
+        </label>
+        <div class="metric">
+            <span>Current Access</span>
+            <span id="parentalAccessStatus">--</span>
+        </div>
+        <div class="metric">
+            <span>Timezone</span>
+            <span id="parentalTimezone">--</span>
+        </div>
+
+        <div id="parentalSchedule"></div>
+        <button id="saveParentalControls" class="actionButton fullWidth" type="button">Save Schedule</button>
+    </section>
+
     <section id="system-card" class="card">
         <h2>System</h2>
         <div class="metric"><span>Last Command</span><span id="message">Ready</span></div>

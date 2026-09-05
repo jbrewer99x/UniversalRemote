@@ -106,6 +106,7 @@ button { font: inherit; }
     header { padding: 10px 14px; }
     h1 { font-size: 1.15rem; }
     #status { font-size: .8rem; }
+    #parental-controls-card { display: none;}
 
     main {
         display: flex;
@@ -189,5 +190,5 @@ button { font: inherit; }
 @media (max-width: 390px) {
     main { padding: 8px; gap: 8px; }
     .card { padding: 10px; }
-    .remoteButton { min-height: 50px; }
+    .remoteButton { min-height: 50px; }    
 }
