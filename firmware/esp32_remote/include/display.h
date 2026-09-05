@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void initDisplay();
+void updateWifiStatus(bool connected);
 void updateDeviceSelector(bool pcSelected);
 void displayStatus(
     bool wifiConnected,
@@ -16,6 +17,7 @@ void displaySettings(
     uint8_t brightnessPercent,
     uint16_t sleepSeconds
 );
+void displayUpdateStatus(const char* message);
 void updateBrightnessSlider(uint8_t brightnessPercent);
 void updateSleepSlider(uint16_t sleepSeconds);
-void updateBatteryStatus(uint8_t percent);
+void updateBatteryStatus(uint8_t percent, float volts);

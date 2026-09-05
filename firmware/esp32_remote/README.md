@@ -26,7 +26,7 @@ Version 0.2.0 represents the first functional handheld Universal Remote firmware
 - Volume Down, Mute, and Volume Up controls
 - Remote commands sent through the Universal Remote server API
 - Settings screen with device/network information
-- Automatic OTA update checks
+- Manual firmware and SD content updates from Settings > Check for updates
 - Manual OTA update checks from the serial console
 - Streamed OTA installation into the inactive partition
 - SHA-256 firmware verification before activating an update
@@ -137,7 +137,7 @@ Available commands:
     i  board/network/battery information
     c  check for firmware update without installing
     u  check for and install firmware update
-    a  toggle automatic OTA updates
+    s  check and sync SD content
     r  reboot
 
 ## OTA updates
@@ -155,20 +155,19 @@ The OTA process:
 6. Activates the new partition only after successful verification.
 7. Reboots into the updated firmware.
 
-Automatic update checks currently use the interval configured in
-`include/config.h`.
+Updates do not run on a timer or at startup. In Settings, tap **Check for updates**
+just above **Play Sounds**. The button synchronizes SD content first, then checks
+and installs newer firmware (which reboots the device). Progress and results appear
+above the button. Playback stops before the SD sync. Wi-Fi must be connected.
+The existing serial commands remain available for manual checks.
+
+Old saved automatic-update
+preferences are ignored; there is no automatic-update toggle.
 
 ## Firmware version
 
-Change:
-
-    FIRMWARE_VERSION
-
-in:
-
-    include/config.h
-
-for every published firmware release.
+The deployment script manages `FIRMWARE_VERSION` in `include/config.h`.
+Do not bump the firmware version manually when editing this project.
 
 The PlatformIO build output is:
 

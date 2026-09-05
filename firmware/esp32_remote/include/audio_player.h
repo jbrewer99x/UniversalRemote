@@ -11,3 +11,5 @@ void serviceAudio();
 void stopAudio();
 void setAudioVolume(uint8_t volume);
 bool isAudioPlaying();
+// Finish queued speaker samples before blocking flash work or power-off.
+void finishAudioPlayback();

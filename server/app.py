@@ -424,7 +424,7 @@ def _sd_manifest_hash(files: list[dict[str, Any]]) -> str:
 
 
 @app.get("/api/firmware/manifest")
-async def firmware_manifest():
+def firmware_manifest():
     """
     Lightweight ESP32 OTA manifest.
 
@@ -531,7 +531,7 @@ async def shutdown_devices():
 
 
 @app.get("/api/firmware/sd/manifest")
-async def sd_firmware_manifest():
+def sd_firmware_manifest():
     """
     Dynamically build a manifest from everything under Firmware/sd/.
 

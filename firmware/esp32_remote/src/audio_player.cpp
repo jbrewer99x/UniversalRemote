@@ -89,8 +89,24 @@ bool isAudioPlaying() {
     return audio.isRunning();
 }
 void stopAudio() {
-    if (audio.isRunning()) {
-        audio.stopSong();
-        Serial.println("Audio: stopped");
+    // stopSong clears decoder buffers even after isRunning() becomes false.
+    audio.stopSong();
+#if ESP_IDF_VERSION_MAJOR < 5
+    i2s_zero_dma_buffer(I2S_NUM_0);
+#endif
+}
+
+void finishAudioPlayback() {
+    const uint32_t started = millis();
+    while (isAudioPlaying() && millis() - started < 15000) {
+        serviceAudio();
+        delay(1);
     }
+    if (!isAudioPlaying()) {
+        // The bundled driver has 16 DMA buffers of 512 stereo frames.
+        // EOF describes decoder completion, not the last audible sample.
+        const uint32_t rate = audio.getSampleRate();
+        if (rate >= 8000) delay((16UL * 512UL * 1000UL + rate - 1) / rate + 10);
+    }
+    stopAudio();
 }

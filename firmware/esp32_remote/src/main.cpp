@@ -5,6 +5,7 @@
 #include <driver/gpio.h>
 
 #include "config.h"
+#include "battery.h"
 #include "ota_client.h"
 #include "secrets.h"
 #include "display.h"
@@ -23,9 +24,15 @@
 
 Preferences prefs;
 
-bool autoUpdate = RemoteConfig::DEFAULT_AUTO_UPDATE;
 bool wasTouching = false;
 bool screenSleeping = false;
+bool lightSleepPending = false;
+uint32_t lightSleepRequestedAt = 0;
+bool wakeButtonArmed = false;
+bool wakeButtonRawDown = false;
+uint32_t wakeButtonChangedAt = 0;
+static constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
+static constexpr uint32_t SLEEP_PREPARE_TIMEOUT_MS = 10000;
 bool soundTestActive = false;
 bool findRemoteActive = false;
 uint32_t lastRemoteCommandPoll = 0;
@@ -33,7 +40,6 @@ static constexpr uint32_t REMOTE_COMMAND_POLL_INTERVAL_MS = 5000;
 size_t soundTestIndex = 0;
 
 uint32_t lastWifiAttempt = 0;
-uint32_t lastUpdateCheck = 0;
 uint32_t lastBatteryUpdate = 0;
 uint32_t lastActivityAt = 0;
 uint32_t sleepStartedAt = 0;
@@ -101,22 +107,11 @@ bool connectWifi() {
     WiFi.persistent(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           millis() - start < RemoteConfig::WIFI_CONNECT_TIMEOUT_MS) {
-        delay(300);
-        Serial.print(".");
-    }
-    Serial.println();
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Wi-Fi connection failed");
-        return false;
-    }
-
-    Serial.printf("Connected. IP=%s RSSI=%d dBm\n",
-                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
-    return true;
+    // WiFi.begin starts association in the background. Never hold up touch,
+    // audio, or screen restoration while waiting for an access point.
+    lastWifiAttempt = millis();
+    Serial.println(" (background connection)");
+    return WiFi.status() == WL_CONNECTED;
 }
 void checkBatterySounds(uint8_t percent) {
     if (percent >= 40) {
@@ -153,38 +148,30 @@ void checkBatterySounds(uint8_t percent) {
 
 
 float readBatteryVoltage() {
-    uint32_t totalMv = 0;
-    for (int i = 0; i < 8; i++) {
-        totalMv += analogReadMilliVolts(BAT_ADC_PIN);
+    // Reject transient ADC spikes without retaining stale readings after wake.
+    uint32_t samples[16];
+    for (int i = 0; i < 16; ++i) {
+        samples[i] = analogReadMilliVolts(BAT_ADC_PIN);
+        for (int j = i; j > 0 && samples[j] < samples[j - 1]; --j) {
+            const uint32_t value = samples[j];
+            samples[j] = samples[j - 1];
+            samples[j - 1] = value;
+        }
+        serviceAudio();
         delay(2);
     }
-
-    float adcVolts = (totalMv / 8.0f) / 1000.0f;
-    return (adcVolts * 3.0f) / 0.990476f;
-}
-
-uint8_t batteryVoltageToPercent(float volts) {
-    if (volts >= 4.20f) return 100;
-    if (volts >= 4.10f) return 90;
-    if (volts >= 4.00f) return 80;
-    if (volts >= 3.90f) return 70;
-    if (volts >= 3.80f) return 55;
-    if (volts >= 3.70f) return 40;
-    if (volts >= 3.60f) return 25;
-    if (volts >= 3.50f) return 15;
-    if (volts >= 3.40f) return 8;
-    if (volts >= 3.30f) return 3;
-    return 0;
-}
-
-uint8_t readBatteryPercent() {
-    return batteryVoltageToPercent(readBatteryVoltage());
+    uint32_t totalMv = 0;
+    for (int i = 4; i < 12; ++i) totalMv += samples[i];
+    return (totalMv / 8000.0f) * RemoteConfig::BATTERY_DIVIDER_RATIO *
+           RemoteConfig::BATTERY_CALIBRATION;
 }
 
 void refreshBatteryStatus() {
-    updateBatteryStatus(readBatteryPercent());
+    const float volts = readBatteryVoltage();
+    const uint8_t percent = batteryVoltageToPercent(volts);
+    updateBatteryStatus(percent, volts);
     lastBatteryUpdate = millis();
-    checkBatterySounds(readBatteryPercent());
+    checkBatterySounds(percent);
 }
 
 
@@ -247,6 +234,7 @@ void serviceFindRemote(bool motionDetected) {
         Serial.println("Find Remote: pickup detected");
 
         findRemoteActive = false;
+        stopAudio();
         setAudioVolume(DEFAULT_VOLUME);
         return;
     }
@@ -314,74 +302,83 @@ void wakeScreen(const char* reason) {
 }
 
 
+// Require a stable release before accepting another press, including at boot
+// and after wake. All timing uses unsigned subtraction for millis() rollover.
+bool pollWakeButton() {
+    const bool down = digitalRead(WAKE_BUTTON_PIN) == LOW;
+    const uint32_t now = millis();
+    if (down != wakeButtonRawDown) {
+        wakeButtonRawDown = down;
+        wakeButtonChangedAt = now;
+    }
+    if (now - wakeButtonChangedAt < BUTTON_DEBOUNCE_MS) return false;
+    if (!down) {
+        wakeButtonArmed = true;
+        return false;
+    }
+    if (!wakeButtonArmed) return false;
+    wakeButtonArmed = false;
+    return true;
+}
+
 void enterLightSleep() {
-    if (findRemoteActive || soundTestActive || isAudioPlaying()) {
+    if (lightSleepPending || findRemoteActive || soundTestActive ||
+        isAudioPlaying() || lowBatteryShutdownPending) return;
+
+    enterScreenSleep();
+    lightSleepPending = true;
+    lightSleepRequestedAt = millis();
+    Serial.println("Sleep: preparing; waiting for audio and button release");
+    playSoundEffect(SoundEffect::Sleeping);
+}
+
+void serviceLightSleep() {
+    if (!lightSleepPending) return;
+
+    const uint32_t now = millis();
+    const bool released = !wakeButtonRawDown &&
+        now - wakeButtonChangedAt >= BUTTON_DEBOUNCE_MS;
+    if (now - lightSleepRequestedAt >= SLEEP_PREPARE_TIMEOUT_MS) {
+        // A stuck button or decoder must not strand the user at a dark screen.
+        stopAudio();
+        lightSleepPending = false;
+        wakeScreen("sleep preparation timed out");
         return;
     }
+    if (isAudioPlaying() || !released) return;
 
-    if (!screenSleeping) {
-        screenSleeping = true;
-        setDisplayBrightness(0);
-    }
-
-    Serial.println("Sleep: entering ESP32 light sleep");
-
-    playSoundEffect(SoundEffect::Sleeping);
-
-    // If playSoundEffect() is asynchronous, wait for it to finish here.
-    while (isAudioPlaying()) {
-        delay(20);
+    const gpio_num_t pin = (gpio_num_t)WAKE_BUTTON_PIN;
+    esp_err_t result = gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
+    if (result == ESP_OK) result = esp_sleep_enable_gpio_wakeup();
+    if (result != ESP_OK) {
+        gpio_wakeup_disable(pin);
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+        lightSleepPending = false;
+        Serial.printf("Sleep: wake configuration failed: %d\n", (int)result);
+        wakeScreen("wake configuration failed");
+        return;
     }
 
     WiFi.disconnect(false, false);
     WiFi.mode(WIFI_OFF);
-
-    delay(30);
-
-    pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
-
-// Wait for the sleep-button press to be fully released first.
-while (digitalRead(WAKE_BUTTON_PIN) == LOW) {
-    delay(10);
-}
-
-gpio_wakeup_enable(
-    (gpio_num_t)WAKE_BUTTON_PIN,
-    GPIO_INTR_LOW_LEVEL
-);
-
-esp_err_t wakeEnableResult = esp_sleep_enable_gpio_wakeup();
-
-Serial.printf(
-    "GPIO18 before sleep=%d, wakeEnable=%d\n",
-    digitalRead(WAKE_BUTTON_PIN),
-    (int)wakeEnableResult
-);
-
-Serial.flush();
-
-esp_err_t sleepResult = esp_light_sleep_start();
-
-    gpio_wakeup_disable((gpio_num_t)WAKE_BUTTON_PIN);
+    Serial.printf("Sleep: entering light sleep; GPIO%d=%d\n",
+                  WAKE_BUTTON_PIN, digitalRead(WAKE_BUTTON_PIN));
+    result = esp_light_sleep_start();
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    gpio_wakeup_disable(pin);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    lightSleepPending = false;
 
-    if (sleepResult != ESP_OK) {
-        Serial.printf(
-            "Sleep: esp_light_sleep_start failed: %d\n",
-            (int)sleepResult
-        );
-    } else {
-        Serial.println("Sleep: woke from light sleep");
-    }
-
-    // Don't let the wake press immediately trigger another sleep command.
-    while (digitalRead(WAKE_BUTTON_PIN) == LOW) {
-        delay(10);
-    }
-
-    lastWifiAttempt = 0;
+    // Show the UI immediately, even if the button stays held or Wi-Fi is down.
+    wakeButtonArmed = false;
+    wakeButtonRawDown = digitalRead(WAKE_BUTTON_PIN) == LOW;
+    wakeButtonChangedAt = millis();
+    wasTouching = true;
+    wakeScreen(result == ESP_OK ? "power button" : "sleep failed");
+    Serial.printf("Sleep: returned result=%d cause=%d GPIO%d=%d\n",
+                  (int)result, (int)cause, WAKE_BUTTON_PIN,
+                  digitalRead(WAKE_BUTTON_PIN));
     connectWifi();
-    wakeScreen("power button");
 }
 
 bool imuWakeMotionDetected() {
@@ -418,7 +415,7 @@ bool imuWakeMotionDetected() {
 
 void printInfo() {
     Serial.printf("Firmware: %s\n", RemoteConfig::FIRMWARE_VERSION);
-    Serial.printf("Auto update: %s\n", autoUpdate ? "ON" : "OFF");
+    Serial.println("Updates: manual (Settings > Check for updates)");
     Serial.printf("Wi-Fi: %s\n", WiFi.status() == WL_CONNECTED ? "connected" : "disconnected");
     Serial.printf("PSRAM: %u total / %u free\n",
                   (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
@@ -457,16 +454,12 @@ else if (c == 'p') {
 else if (c == 's') {
     SdUpdater::check();
 }
-else if (c == 'a') {
-        autoUpdate = !autoUpdate;
-        prefs.putBool("auto_update", autoUpdate);
-        Serial.printf("Auto update: %s\n", autoUpdate ? "ON" : "OFF");
-    } else if (c == 'r') {
+else if (c == 'r') {
         ESP.restart();
     } else if (c == 'h' || c == '?') {
        Serial.println(
     "h help | i info | c check | u update | s sync SD | "
-    "p play WAV | a auto-update toggle | r reboot");
+    "p play WAV | r reboot");
     }
 }
 
@@ -570,6 +563,40 @@ else if (
     else if (x >= 162 && x <= 232 && y >= 275 && y <= 311) sendSelectedCommand("volume_up");
 }
 
+void checkSettingsUpdates() {
+    if (WiFi.status() != WL_CONNECTED) {
+        displayUpdateStatus("Wi-Fi offline. Try again.");
+        return;
+    }
+    if (lowBatteryShutdownPending) {
+        displayUpdateStatus("Battery low. Charge first.");
+        return;
+    }
+
+    // One audio player/SD card: finish other modes before updating files.
+    soundTestActive = false;
+    findRemoteActive = false;
+    stopAudio();
+    setAudioVolume(DEFAULT_VOLUME);
+
+    // Firmware installation reboots immediately, so sync SD content first.
+    displayUpdateStatus("Updating SD content...");
+    const bool sdOk = SdUpdater::check();
+    stopAudio();
+    displayUpdateStatus(sdOk ? "Checking firmware..." : "SD failed; checking firmware...");
+    const auto result = OtaClient::check(true);
+    Serial.printf("Manual update: SD=%s; OTA: %s\n",
+                  sdOk ? "ready" : "failed", result.message.c_str());
+
+    if (result.result == OtaClient::Result::UpToDate) {
+        displayUpdateStatus(sdOk ? "Updates complete. All current." : "Firmware current. SD failed.");
+    } else {
+        displayUpdateStatus(sdOk ? "SD ready. Firmware check failed." : "Update failed. Try again.");
+    }
+    // A long download must not make the screen sleep as soon as it finishes.
+    noteActivity();
+}
+
 void handleSettingsTap(uint16_t x, uint16_t y) {
     if (y < 36 && x < 75) {
         Serial.println("UI: returning Home");
@@ -594,6 +621,11 @@ void handleSettingsTap(uint16_t x, uint16_t y) {
         prefs.putUShort("sleep_sec", uiSleepSeconds);
         noteActivity();
         Serial.printf("UI: sleep timer = %u sec\n", uiSleepSeconds);
+        return;
+    }
+    // Match the new button's rectangle immediately above Play Sounds.
+    if (x >= 20 && x < 220 && y >= 215 && y < 255) {
+        checkSettingsUpdates();
         return;
     }
     // Play Sounds
@@ -624,7 +656,6 @@ void setup() {
     prefs.begin("remote", false);
     uiBrightness = prefs.getUChar("brightness", 75);
     uiSleepSeconds = prefs.getUShort("sleep_sec", 30);
-    autoUpdate = prefs.getBool("auto_update", RemoteConfig::DEFAULT_AUTO_UPDATE);
 
     initDisplay();
     setDisplayBrightness(uiBrightness);
@@ -636,7 +667,6 @@ void setup() {
     printInfo();
     showHome();
 
-    lastUpdateCheck = millis();
     lastActivityAt = millis();
     primeImuBaseline();
 
@@ -647,24 +677,32 @@ initAudio();
 }
 
 void loop() {
-    serialConsole();
     serviceAudio();
-    serviceRemoteCommands();
+    if (lowBatteryShutdownPending) {
+        serviceLowBatteryShutdown();
+        delay(1);
+        return;
+    }
+    serialConsole();
+    const bool buttonPressed = pollWakeButton();
+    if (buttonPressed && !lightSleepPending) enterLightSleep();
+    if (lightSleepPending) {
+        serviceLightSleep();
+        delay(5);
+        return; // Resample touch and time after sleep; never use pre-sleep input.
+    }
+
+    static bool displayedWifiConnected = false;
+    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    if (!screenSleeping && currentScreen == ScreenMode::Home &&
+        wifiConnected != displayedWifiConnected) {
+        updateWifiStatus(wifiConnected);
+        displayedWifiConnected = wifiConnected;
+    }
 
     RemoteTouchPoint point = readTouch();
     uint32_t now = millis();
-
     bool imuMotion = false;
-static bool wakeButtonWasDown = false;
-
-bool wakeButtonDown = digitalRead(WAKE_BUTTON_PIN) == LOW;
-
-if (wakeButtonDown && !wakeButtonWasDown) {
-    Serial.println("Power button: entering light sleep");
-    enterLightSleep();
-}
-
-wakeButtonWasDown = wakeButtonDown;
     if (
         findRemoteActive ||
         (
@@ -714,7 +752,7 @@ wakeButtonWasDown = wakeButtonDown;
 
         if (
             uiSleepSeconds > 0 &&
-            now - lastActivityAt >= ((uint32_t)uiSleepSeconds * 1000UL)
+            millis() - lastActivityAt >= ((uint32_t)uiSleepSeconds * 1000UL)
         ) {
             enterScreenSleep();
         }
@@ -728,16 +766,6 @@ wakeButtonWasDown = wakeButtonDown;
         connectWifi();
     }
 
-if (
-    autoUpdate &&
-    WiFi.status() == WL_CONNECTED &&
-    now - lastUpdateCheck >= RemoteConfig::OTA_CHECK_INTERVAL_MS
-) {
-    lastUpdateCheck = now;
-
-    checkUpdate(true);
-    SdUpdater::check();
-}
 
     if (
         !screenSleeping &&
@@ -745,6 +773,9 @@ if (
     ) {
         refreshBatteryStatus();
     }
+
+    // Give local input and audio priority over the synchronous network poll.
+    if (!lightSleepPending && !isAudioPlaying()) serviceRemoteCommands();
 
     // Slower loop while the display is dark.
     delay(screenSleeping ? 20 : 5);
@@ -759,6 +790,7 @@ void serviceLowBatteryShutdown() {
         return;
     }
 
+    finishAudioPlayback();
     Serial.println("Battery critical: shutting down");
 
     lowBatteryShutdownPending = false;

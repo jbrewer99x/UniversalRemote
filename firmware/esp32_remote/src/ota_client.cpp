@@ -162,6 +162,7 @@ Status check(bool installIfAvailable) {
         s.result = Result::NoWifi; s.message = "Wi-Fi is not connected"; return s;
     }
 
+    stopAudio(); // Serial updates can also begin while a sound is playing.
     HTTPClient http;
     String manifest = joinUrl(String(REMOTE_SERVER_URL), RemoteConfig::OTA_MANIFEST_PATH);
     http.setConnectTimeout(RemoteConfig::HTTP_CONNECT_TIMEOUT_MS);
@@ -205,11 +206,7 @@ Status check(bool installIfAvailable) {
     s.message = "Update available: " + s.currentVersion + " -> " + ver;
     if (!installIfAvailable) return s;
     playSoundEffect(SoundEffect::UpdateStarting);
-    while (isAudioPlaying()) {
-    serviceAudio();
-    delay(5);
-}
-    
+    finishAudioPlayback();
 
     String error;
     if (!install(joinUrl(String(REMOTE_SERVER_URL), path), size, hash, error)) {
@@ -219,6 +216,7 @@ Status check(bool installIfAvailable) {
     s.result = Result::Installed;
     s.message = "Installed " + ver + "; rebooting";
     Serial.println(s.message);
+    stopAudio();
     delay(100);
     ESP.restart();
     return s;

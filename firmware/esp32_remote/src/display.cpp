@@ -265,6 +265,10 @@ void initDisplay() {
     Serial.println("Display: ST7789 init complete");
 }
 
+void updateWifiStatus(bool connected) {
+    fillRect(10, 10, 8, 8, connected ? COLOR_GREEN : COLOR_RED);
+}
+
 void displayStatus(
     bool wifiConnected,
     const String &ipAddress,
@@ -276,14 +280,7 @@ void displayStatus(
     // ---------- STATUS BAR ----------
     fillRect(0, 0, SCREEN_W, 28, 0x2104);
 
-    // Wi-Fi indicator
-    fillRect(
-        10,
-        10,
-        8,
-        8,
-        wifiConnected ? COLOR_GREEN : COLOR_RED
-    );
+    updateWifiStatus(wifiConnected);
 
     // Battery percentage is drawn separately by
     // updateBatteryStatus() from main.cpp.
@@ -454,6 +451,10 @@ void displaySettings(
         COLOR_WHITE
     );
 
+    // Manual firmware + SD update, matching the Play Sounds button.
+    fillRect(20, 215, 200, 40, 0x18E3);
+    drawText(69, 230, "Check for updates", COLOR_WHITE, 1);
+
     // Play Sounds button
     fillRect(
     20,
@@ -481,6 +482,11 @@ String footer =
     1
 );
 }
+void displayUpdateStatus(const char* message) {
+    fillRect(14, 185, 212, 18, COLOR_BLACK);
+    drawText(14, 190, message, COLOR_WHITE, 1);
+}
+
 void updateBrightnessSlider(uint8_t brightnessPercent) {
     // Clear only the dynamic brightness area
     fillRect(190, 60, 36, 8, COLOR_BLACK);
@@ -590,16 +596,16 @@ void updateSleepSlider(uint16_t sleepSeconds) {
     
 }
 
-void updateBatteryStatus(uint8_t percent) {
+void updateBatteryStatus(uint8_t percent, float volts) {
     if (percent > 100) percent = 100;
 
     // Clear only the battery portion of the status bar.
-    fillRect(196, 4, 44, 20, 0x2104);
+    fillRect(166, 4, 74, 20, 0x2104);
 
-    String text = String(percent) + "%";
+    String text = String(percent) + "% " + String(volts, 2) + "V";
 
     drawText(
-        202,
+        174,
         9,
         text,
         COLOR_WHITE,
