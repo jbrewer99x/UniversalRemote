@@ -49,14 +49,21 @@ uint8_t uiBrightness = 75;
 uint16_t uiSleepSeconds = 30;
 
 static constexpr uint32_t BATTERY_UPDATE_INTERVAL_MS = 30000;
-// 4 Hz pickup polling while the screen is off.
-static constexpr uint32_t IMU_CHECK_INTERVAL_MS = 250;
+// 20 Hz polling catches shaking while awake or screen-off.
+static constexpr uint32_t IMU_CHECK_INTERVAL_MS = 50;
 static constexpr uint32_t IMU_WAKE_GRACE_MS = 750;
 static constexpr float IMU_WAKE_THRESHOLD_G = 0.12f;
 // Preserve screen-off + IMU wake for one hour before true light sleep.
 static constexpr uint32_t LIGHT_SLEEP_AFTER_MS = 60UL * 60UL * 1000UL;
 
 bool haveLastImu = false;
+bool shakeActive = false;
+bool shakePlayed = false;
+uint32_t shakeStartedAt = 0;
+uint32_t lastShakeAt = 0;
+static constexpr float SHAKE_THRESHOLD_G = 0.6f;
+static constexpr uint32_t SHAKE_GAP_MS = 400;
+static constexpr uint32_t SHAKE_REARM_MS = 1000;
 float lastImuX = 0.0f;
 float lastImuY = 0.0f;
 float lastImuZ = 0.0f;
@@ -266,6 +273,8 @@ void noteActivity() {
 }
 
 void primeImuBaseline() {
+    shakeActive = false;
+    shakePlayed = false;
     float x, y, z;
     if (readImuAcceleration(x, y, z)) {
         lastImuX = x;
@@ -342,6 +351,7 @@ void serviceLightSleep() {
         // A stuck button or decoder must not strand the user at a dark screen.
         stopAudio();
         lightSleepPending = false;
+        reportErrorSound();
         wakeScreen("sleep preparation timed out");
         return;
     }
@@ -355,6 +365,7 @@ void serviceLightSleep() {
         esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
         lightSleepPending = false;
         Serial.printf("Sleep: wake configuration failed: %d\n", (int)result);
+        reportErrorSound();
         wakeScreen("wake configuration failed");
         return;
     }
@@ -378,16 +389,31 @@ void serviceLightSleep() {
     Serial.printf("Sleep: returned result=%d cause=%d GPIO%d=%d\n",
                   (int)result, (int)cause, WAKE_BUTTON_PIN,
                   digitalRead(WAKE_BUTTON_PIN));
+    if (result == ESP_OK && cause == ESP_SLEEP_WAKEUP_GPIO &&
+        !lowBatteryShutdownPending) {
+        playSoundEffect(SoundEffect::Waking);
+    } else if (result != ESP_OK) {
+        reportErrorSound();
+    }
     connectWifi();
 }
 
 bool imuWakeMotionDetected() {
     uint32_t now = millis();
     if (now - lastImuCheck < IMU_CHECK_INTERVAL_MS) return false;
+    if (now - lastImuCheck > SHAKE_GAP_MS) {
+        // Downloads/sleep are unobserved time, not sustained shaking.
+        shakeActive = false;
+        haveLastImu = false;
+    }
     lastImuCheck = now;
 
     float x, y, z;
-    if (!readImuAcceleration(x, y, z)) return false;
+    if (!readImuAcceleration(x, y, z)) {
+        shakeActive = false;
+        haveLastImu = false;
+        return false;
+    }
 
     if (!haveLastImu) {
         lastImuX = x;
@@ -406,6 +432,22 @@ bool imuWakeMotionDetected() {
     lastImuZ = z;
 
     float maxDelta = max(dx, max(dy, dz));
+    if (now - lastShakeAt >= SHAKE_REARM_MS) shakePlayed = false;
+    if (maxDelta >= SHAKE_THRESHOLD_G) {
+        if (!shakeActive || now - lastShakeAt > SHAKE_GAP_MS) {
+            shakeActive = true;
+            shakeStartedAt = now;
+        }
+        lastShakeAt = now;
+        if (!shakePlayed && now - shakeStartedAt > 3000 &&
+            !isAudioPlaying() && !findRemoteActive && !soundTestActive &&
+            !lowBatteryShutdownPending && !lightSleepPending) {
+            shakePlayed = true;
+            playSoundEffect(SoundEffect::PleaseStop);
+        }
+    } else if (now - lastShakeAt > SHAKE_GAP_MS) {
+        shakeActive = false;
+    }
     if (maxDelta >= IMU_WAKE_THRESHOLD_G) {
         Serial.printf("IMU: wake motion delta=%.3f\n", maxDelta);
         return true;
@@ -565,6 +607,7 @@ else if (
 
 void checkSettingsUpdates() {
     if (WiFi.status() != WL_CONNECTED) {
+        reportErrorSound();
         displayUpdateStatus("Wi-Fi offline. Try again.");
         return;
     }
@@ -609,7 +652,7 @@ void handleSettingsTap(uint16_t x, uint16_t y) {
         uiBrightness = constrain(value, 0, 100);
         setDisplayBrightness(uiBrightness);
         updateBrightnessSlider(uiBrightness);
-        prefs.putUChar("brightness", uiBrightness);
+        if (!prefs.putUChar("brightness", uiBrightness)) reportErrorSound();
         Serial.printf("UI: brightness = %u%%\n", uiBrightness);
         return;
     }
@@ -618,7 +661,7 @@ void handleSettingsTap(uint16_t x, uint16_t y) {
         int value = map(x, 14, 226, 2, 120);
         uiSleepSeconds = constrain(value, 2, 120);
         updateSleepSlider(uiSleepSeconds);
-        prefs.putUShort("sleep_sec", uiSleepSeconds);
+        if (!prefs.putUShort("sleep_sec", uiSleepSeconds)) reportErrorSound();
         noteActivity();
         Serial.printf("UI: sleep timer = %u sec\n", uiSleepSeconds);
         return;
@@ -653,7 +696,7 @@ void setup() {
 
     analogReadResolution(12);
 
-    prefs.begin("remote", false);
+    if (!prefs.begin("remote", false)) reportErrorSound();
     uiBrightness = prefs.getUChar("brightness", 75);
     uiSleepSeconds = prefs.getUShort("sleep_sec", 30);
 
@@ -665,15 +708,17 @@ void setup() {
     OtaClient::begin();
     connectWifi();
     printInfo();
-    showHome();
-
     lastActivityAt = millis();
     primeImuBaseline();
 
     if (initSdCard()) {
         testSdCard();
-}
-initAudio();
+    }
+    initAudio();
+    playSoundEffect(SoundEffect::Startup);
+    finishAudioPlayback();
+    showHome(); // Battery warnings now run after audio and SD are ready.
+    noteActivity();
 }
 
 void loop() {
@@ -702,16 +747,9 @@ void loop() {
 
     RemoteTouchPoint point = readTouch();
     uint32_t now = millis();
-    bool imuMotion = false;
-    if (
-        findRemoteActive ||
-        (
-            screenSleeping &&
-            now - sleepStartedAt >= IMU_WAKE_GRACE_MS
-        )
-    ) {
-        imuMotion = imuWakeMotionDetected();
-    }
+    const bool detectedMotion = imuWakeMotionDetected();
+    const bool imuMotion = detectedMotion && (findRemoteActive ||
+        (screenSleeping && now - sleepStartedAt >= IMU_WAKE_GRACE_MS));
 
     serviceFindRemote(imuMotion);
     serviceSoundTest();
@@ -773,6 +811,9 @@ void loop() {
     ) {
         refreshBatteryStatus();
     }
+
+    if (!lowBatteryShutdownPending && !lightSleepPending &&
+        !findRemoteActive && !soundTestActive) serviceErrorSound();
 
     // Give local input and audio priority over the synchronous network poll.
     if (!lightSleepPending && !isAudioPlaying()) serviceRemoteCommands();

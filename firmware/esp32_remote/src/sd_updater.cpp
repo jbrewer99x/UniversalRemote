@@ -40,6 +40,7 @@ bool ensurePreferences() {
         );
     }
 
+    if (!sdPrefsReady) reportErrorSound();
     return sdPrefsReady;
 }
 
@@ -602,7 +603,7 @@ bool isManagedPathSafe(
 
 namespace SdUpdater {
 
-bool check() {
+static bool checkImpl() {
     if (!isSdCardReady()) {
         Serial.println(
             "SD Update: card unavailable; no changes made"
@@ -872,10 +873,9 @@ bool check() {
             updated
         );
         if (updated > 0) {
-            playSoundEffect(
-                SoundEffect::NewFilesLoaded
-    );
-}
+            playSoundEffect(SoundEffect::NewFilesLoaded);
+            finishAudioPlayback();
+        }
         return false;
     }
 
@@ -902,6 +902,7 @@ bool check() {
             );
 
         if (saved == 0) {
+            reportErrorSound();
             Serial.println(
                 "SD Update: warning - could not save manifest hash; next check will fully verify files"
             );
@@ -919,7 +920,23 @@ bool check() {
         updated
     );
 
+    if (updated > 0) {
+        playSoundEffect(SoundEffect::NewFilesLoaded);
+        finishAudioPlayback();
+    }
+
     return true;
+}
+
+bool check() {
+    stopAudio(); // Both Settings and the serial console share this SD card.
+    const bool ok = checkImpl();
+    if (!ok) {
+        reportErrorSound();
+        serviceErrorSound();
+        finishAudioPlayback();
+    }
+    return ok;
 }
 
 } // namespace SdUpdater

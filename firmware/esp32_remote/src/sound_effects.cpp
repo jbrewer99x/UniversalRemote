@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include "sound_effects.h"
 #include "audio_player.h"
 
@@ -7,6 +8,10 @@ bool playSoundEffect(SoundEffect effect) {
     switch (effect) {
         case SoundEffect::Startup:
             path = "/content/starting-up.wav";
+            break;
+
+        case SoundEffect::Waking:
+            path = "/content/waking-up.wav";
             break;
 
         case SoundEffect::UpdateStarting:
@@ -63,4 +68,19 @@ bool playSoundEffect(SoundEffect effect) {
     }
 
     return playWav(path);
+}
+namespace {
+bool errorPending = false;
+bool errorPlayed = false;
+uint32_t lastErrorSound = 0;
+}
+void reportErrorSound() {
+    if (!errorPlayed || millis() - lastErrorSound >= 30000) errorPending = true;
+}
+void serviceErrorSound() {
+    if (!errorPending || isAudioPlaying()) return;
+    errorPending = false;
+    errorPlayed = true;
+    lastErrorSound = millis(); // Set before playback: a missing WAV must not recurse.
+    playSoundEffect(SoundEffect::BloodyHell);
 }

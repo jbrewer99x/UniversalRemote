@@ -1,3 +1,4 @@
+#include "sound_effects.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <TouchDrv.hpp>
@@ -28,6 +29,7 @@ bool initTouch() {
 
     if (!touchReady) {
         Serial.println("Touch: CST3530 initialization FAILED");
+        reportErrorSound();
         return false;
     }
 

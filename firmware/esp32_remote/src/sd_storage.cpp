@@ -1,3 +1,4 @@
+#include "sound_effects.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -25,7 +26,7 @@ bool initSdCard() {
     if (!SD.begin(SD_CS, sdSpi)) {
         Serial.println("SD: mount FAILED");
         sdReady = false;
-        return false;
+        reportErrorSound(); return false;
     }
 
     uint8_t type = SD.cardType();
@@ -33,7 +34,7 @@ bool initSdCard() {
     if (type == CARD_NONE) {
         Serial.println("SD: no card detected");
         sdReady = false;
-        return false;
+        reportErrorSound(); return false;
     }
 
     Serial.printf(
@@ -49,7 +50,7 @@ bool writeSdTextFile(
     const char* path,
     const String& text
 ) {
-    if (!sdReady) return false;
+    if (!sdReady) { reportErrorSound(); return false; }
 
     File file = SD.open(path, FILE_WRITE);
 
@@ -58,17 +59,17 @@ bool writeSdTextFile(
             "SD: failed opening %s for write\n",
             path
         );
-        return false;
+        reportErrorSound(); return false;
     }
 
-    file.print(text);
+    const size_t written = file.print(text);
     file.close();
-
+    if (written != text.length()) { reportErrorSound(); return false; }
     return true;
 }
 
 String readSdTextFile(const char* path) {
-    if (!sdReady) return "";
+    if (!sdReady) { reportErrorSound(); return ""; }
 
     File file = SD.open(path, FILE_READ);
 
@@ -77,6 +78,7 @@ String readSdTextFile(const char* path) {
             "SD: failed opening %s for read\n",
             path
         );
+        reportErrorSound();
         return "";
     }
 
@@ -98,7 +100,7 @@ bool testSdCard() {
         "Universal Remote SD test\n";
 
     if (!writeSdTextFile(path, expected)) {
-        return false;
+        reportErrorSound(); return false;
     }
 
     String actual =
@@ -108,7 +110,7 @@ bool testSdCard() {
         Serial.println(
             "SD: read/write verification FAILED"
         );
-        return false;
+        reportErrorSound(); return false;
     }
 
     Serial.println(

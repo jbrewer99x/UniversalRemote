@@ -2,6 +2,7 @@
 
 enum class SoundEffect {
     Startup,
+    Waking,
     UpdateStarting,
     NewFilesLoaded,
     Success,
@@ -20,3 +21,6 @@ enum class SoundEffect {
 };
 
 bool playSoundEffect(SoundEffect effect);
+// Coalesce errors and defer playback until normal audio is idle.
+void reportErrorSound();
+void serviceErrorSound();

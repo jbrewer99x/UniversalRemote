@@ -1,3 +1,4 @@
+#include "sound_effects.h"
 #include <Arduino.h>
 #include <SD.h>
 #include <Audio.h>
@@ -14,11 +15,11 @@ static Audio audio;
 bool initAudio() {
     Serial.println("Audio: initializing");
 
-    audio.setPinout(
-        I2S_BCLK,
-        I2S_LRC,
-        I2S_DOUT
-    );
+    if (!audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT)) {
+        Serial.println("Audio: pin configuration failed");
+        reportErrorSound();
+        return false;
+    }
 
     audio.setVolume(
         DEFAULT_VOLUME
@@ -35,6 +36,7 @@ bool playWav(const char* path) {
             "Audio: SD card unavailable"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -44,6 +46,7 @@ bool playWav(const char* path) {
             path
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -62,6 +65,7 @@ bool playWav(const char* path) {
             "Audio: failed to open file"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -102,6 +106,7 @@ void finishAudioPlayback() {
         serviceAudio();
         delay(1);
     }
+    if (isAudioPlaying()) reportErrorSound();
     if (!isAudioPlaying()) {
         // The bundled driver has 16 DMA buffers of 512 stereo frames.
         // EOF describes decoder completion, not the last audible sample.

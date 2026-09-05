@@ -1,3 +1,4 @@
+#include "sound_effects.h"
 #include <Arduino.h>
 #include <Wire.h>
 
@@ -38,6 +39,7 @@ static bool readRegister(uint8_t reg, uint8_t &value) {
     imuWire.write(reg);
 
     if (imuWire.endTransmission(false) != 0) {
+        reportErrorSound();
         return false;
     }
 
@@ -45,6 +47,7 @@ static bool readRegister(uint8_t reg, uint8_t &value) {
         (uint8_t)IMU_ADDR,
         (uint8_t)1
     ) != 1) {
+        reportErrorSound();
         return false;
     }
 
@@ -63,6 +66,7 @@ static bool readRegisters(
     imuWire.write(reg);
 
     if (imuWire.endTransmission(false) != 0) {
+        reportErrorSound();
         return false;
     }
 
@@ -72,6 +76,7 @@ static bool readRegisters(
     );
 
     if (received != length) {
+        reportErrorSound();
         return false;
     }
 
@@ -106,6 +111,7 @@ bool initImu() {
             "IMU: no device found at 0x6B"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -123,6 +129,7 @@ bool initImu() {
             "IMU: failed to read WHO_AM_I"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -147,6 +154,7 @@ bool initImu() {
             "IMU: CTRL1 write failed"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -170,6 +178,7 @@ bool initImu() {
             "IMU: CTRL2 write failed"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -187,6 +196,7 @@ bool initImu() {
             "IMU: CTRL7 write failed"
         );
 
+        reportErrorSound();
         return false;
     }
 
@@ -210,6 +220,7 @@ bool readImuAcceleration(
     float &z
 ) {
     if (!imuReady) {
+        reportErrorSound();
         return false;
     }
 
@@ -220,6 +231,7 @@ bool readImuAcceleration(
         data,
         sizeof(data)
     )) {
+        reportErrorSound();
         return false;
     }
 

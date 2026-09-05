@@ -1,3 +1,4 @@
+#include "sound_effects.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -12,6 +13,7 @@ bool sendRemoteCommand(
 ) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("Remote API: Wi-Fi disconnected");
+        reportErrorSound();
         return false;
     }
 
@@ -23,6 +25,7 @@ bool sendRemoteCommand(
 
     if (!http.begin(url)) {
         Serial.println("Remote API: HTTP begin failed");
+        reportErrorSound();
         return false;
     }
 
@@ -60,6 +63,7 @@ bool sendRemoteCommand(
 
     http.end();
 
+    if (!ok) reportErrorSound();
     return ok;
 }
 
@@ -68,6 +72,7 @@ bool checkRemoteCommand(String &command) {
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("Remote API poll: skipped, Wi-Fi disconnected");
+        reportErrorSound();
         return false;
     }
 
@@ -80,6 +85,7 @@ bool checkRemoteCommand(String &command) {
 
     if (!http.begin(url)) {
         Serial.println("Remote API poll: HTTP begin failed");
+        reportErrorSound();
         return false;
     }
 
@@ -88,6 +94,7 @@ bool checkRemoteCommand(String &command) {
 
     if (status < 200 || status >= 300) {
         http.end();
+        reportErrorSound();
         return false;
     }
 
@@ -106,6 +113,7 @@ bool checkRemoteCommand(String &command) {
             "Remote API poll: invalid JSON: %s\n",
             error.c_str()
         );
+        reportErrorSound();
         return false;
     }
 

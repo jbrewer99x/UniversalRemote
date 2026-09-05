@@ -151,10 +151,10 @@ bool install(const String& url, size_t expectedSize, const String& expectedHash,
 
 namespace OtaClient {
 void begin() {
-    esp_ota_mark_app_valid_cancel_rollback();
+    if (esp_ota_mark_app_valid_cancel_rollback() != ESP_OK) reportErrorSound();
 }
 
-Status check(bool installIfAvailable) {
+static Status checkImpl(bool installIfAvailable) {
     Status s;
     s.currentVersion = RemoteConfig::FIRMWARE_VERSION;
 
@@ -221,4 +221,11 @@ Status check(bool installIfAvailable) {
     ESP.restart();
     return s;
 }
+Status check(bool installIfAvailable) {
+    const Status status = checkImpl(installIfAvailable);
+    if (status.result == Result::NoWifi || status.result == Result::ManifestError ||
+        status.result == Result::InstallError) reportErrorSound();
+    return status;
+}
+
 }
