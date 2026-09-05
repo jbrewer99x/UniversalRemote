@@ -19,6 +19,7 @@
 
 static TwoWire imuWire = TwoWire(1);
 static bool imuReady = false;
+static bool imuSleeping = false;
 
 
 // -----------------------------------------------------------------------------
@@ -93,6 +94,7 @@ static bool readRegisters(
 // -----------------------------------------------------------------------------
 
 bool initImu() {
+    imuReady = false;
     Serial.println("IMU: initializing QMI8658");
 
     imuWire.begin(
@@ -203,6 +205,7 @@ bool initImu() {
     delay(50);
 
     imuReady = true;
+    imuSleeping = false;
 
     Serial.println("IMU: ready");
 
@@ -219,6 +222,7 @@ bool readImuAcceleration(
     float &y,
     float &z
 ) {
+    if (imuSleeping) return false;
     if (!imuReady) {
         reportErrorSound();
         return false;
@@ -261,5 +265,18 @@ bool readImuAcceleration(
     y = rawY * SCALE;
     z = rawZ * SCALE;
 
+    return true;
+}
+
+bool setImuSleeping(bool sleeping) {
+    if (!imuReady || sleeping == imuSleeping) return true;
+    // Suspend sampling in true light sleep only. Keep register configuration and
+    // oscillator for quick wake; ordinary screen-off still needs the accelerometer.
+    if (!writeRegister(QMI8658_CTRL7, sleeping ? 0x00 : 0x01)) {
+        reportErrorSound();
+        return false;
+    }
+    imuSleeping = sleeping;
+    if (!sleeping) delay(40); // one sample at the existing 31.25 Hz ODR
     return true;
 }

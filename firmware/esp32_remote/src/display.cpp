@@ -1,650 +1,380 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include "font5x7.h"
+#include <esp_heap_caps.h>
+#include <lvgl.h>
 #include "display.h"
 #include "config.h"
+#include "power_manager.h"
 
-#define LCD_MOSI 45
-#define LCD_SCLK 40
-#define LCD_CS   42
-#define LCD_DC   41
-#define LCD_RST  39
-#define LCD_BL   5
+namespace {
+constexpr int LCD_MOSI = 45, LCD_SCLK = 40, LCD_CS = 42;
+constexpr int LCD_DC = 41, LCD_RST = 39, LCD_BL = 5;
+constexpr int SCREEN_W = 240, SCREEN_H = 320;
+constexpr uint32_t BACKGROUND = 0x10151C, SURFACE = 0x252E3A;
+constexpr uint32_t TEXT = 0xEDF2F7, MUTED = 0xA3B2C2, ACCENT = 0x67DF9A;
+SPIClass lcdSPI(FSPI);
+lv_display_t* display = nullptr;
+lv_indev_t* input = nullptr;
+lv_obj_t *home, *settings, *wifi, *battery, *pc, *roku;
+lv_obj_t *brightnessSlider, *sleepSlider, *brightnessValue, *sleepValue, *updateMessage, *feedback;
+bool ready = false, touchDown = false;
+bool panelSleeping = false, sleepRequested = false;
+uint32_t lastSleepOutAt = 0;
+uint64_t totalFlushUs = 0;
+uint16_t touchX = 0, touchY = 0;
+uint32_t feedbackUntil = 0, maxServiceUs = 0, maxFlushUs = 0;
+DisplayAction actions[16];
+uint8_t actionHead = 0, actionCount = 0;
 
-static SPIClass lcdSPI(FSPI);
-
-static constexpr uint16_t SCREEN_W = 240;
-static constexpr uint16_t SCREEN_H = 320;
-
-static constexpr uint16_t COLOR_BLACK = 0x0000;
-static constexpr uint16_t COLOR_WHITE = 0xFFFF;
-static constexpr uint16_t COLOR_GREEN = 0x07E0;
-static constexpr uint16_t COLOR_BLUE  = 0x001F;
-static constexpr uint16_t COLOR_RED   = 0xF800;
-static constexpr uint16_t COLOR_GRAY  = 0x8410;
-
-static void lcdSelect() {
+void writeCommand(uint8_t command) {
+    digitalWrite(LCD_DC, LOW);
     digitalWrite(LCD_CS, LOW);
-}
-
-static void lcdDeselect() {
+    lcdSPI.transfer(command);
     digitalWrite(LCD_CS, HIGH);
 }
-
-static void writeCommand(uint8_t cmd) {
-    digitalWrite(LCD_DC, LOW);
-    lcdSelect();
-    lcdSPI.transfer(cmd);
-    lcdDeselect();
-}
-
-static void writeData(uint8_t data) {
+void writeData(uint8_t data) {
     digitalWrite(LCD_DC, HIGH);
-    lcdSelect();
+    digitalWrite(LCD_CS, LOW);
     lcdSPI.transfer(data);
-    lcdDeselect();
+    digitalWrite(LCD_CS, HIGH);
 }
-
-static void setAddressWindow(
-    uint16_t x0,
-    uint16_t y0,
-    uint16_t x1,
-    uint16_t y1
-) {
+void addressWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     writeCommand(0x2A);
-
+    uint8_t columns[] = {uint8_t(x0 >> 8), uint8_t(x0), uint8_t(x1 >> 8), uint8_t(x1)};
     digitalWrite(LCD_DC, HIGH);
-    lcdSelect();
-    lcdSPI.transfer(x0 >> 8);
-    lcdSPI.transfer(x0 & 0xFF);
-    lcdSPI.transfer(x1 >> 8);
-    lcdSPI.transfer(x1 & 0xFF);
-    lcdDeselect();
-
+    digitalWrite(LCD_CS, LOW);
+    lcdSPI.writeBytes(columns, sizeof(columns));
+    digitalWrite(LCD_CS, HIGH);
     writeCommand(0x2B);
-
+    uint8_t rows[] = {uint8_t(y0 >> 8), uint8_t(y0), uint8_t(y1 >> 8), uint8_t(y1)};
     digitalWrite(LCD_DC, HIGH);
-    lcdSelect();
-    lcdSPI.transfer(y0 >> 8);
-    lcdSPI.transfer(y0 & 0xFF);
-    lcdSPI.transfer(y1 >> 8);
-    lcdSPI.transfer(y1 & 0xFF);
-    lcdDeselect();
-
+    digitalWrite(LCD_CS, LOW);
+    lcdSPI.writeBytes(rows, sizeof(rows));
+    digitalWrite(LCD_CS, HIGH);
     writeCommand(0x2C);
 }
-
-static void fillRect(
-    uint16_t x,
-    uint16_t y,
-    uint16_t w,
-    uint16_t h,
-    uint16_t color
-) {
-    if (!w || !h) return;
-
-    if (x >= SCREEN_W || y >= SCREEN_H) return;
-
-    if (x + w > SCREEN_W) w = SCREEN_W - x;
-    if (y + h > SCREEN_H) h = SCREEN_H - y;
-
-    setAddressWindow(
-        x,
-        y,
-        x + w - 1,
-        y + h - 1
-    );
-
+void flush(lv_display_t* disp, const lv_area_t* area, uint8_t* pixels) {
+    const uint32_t started = micros();
+    const size_t count = lv_area_get_width(area) * lv_area_get_height(area);
+    // LVGL renders native little-endian RGB565; ST7789 accepts MSB first.
+    lv_draw_sw_rgb565_swap(pixels, count);
+    lcdSPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
+    addressWindow(area->x1, area->y1, area->x2, area->y2);
     digitalWrite(LCD_DC, HIGH);
-    lcdSelect();
-
-    uint8_t hi = color >> 8;
-    uint8_t lo = color & 0xFF;
-
-    uint32_t count =
-        static_cast<uint32_t>(w) *
-        static_cast<uint32_t>(h);
-
-    while (count--) {
-        lcdSPI.transfer(hi);
-        lcdSPI.transfer(lo);
-    }
-
-    lcdDeselect();
-}
-
-static void fillScreen(uint16_t color) {
-    fillRect(0, 0, SCREEN_W, SCREEN_H, color);
-}
-
-// Minimal 5x7 font, enough for status/debug text.
-
-
-static void drawPixel(
-    uint16_t x,
-    uint16_t y,
-    uint16_t color
-) {
-    if (x >= SCREEN_W || y >= SCREEN_H) return;
-
-    setAddressWindow(x, y, x, y);
-
-    digitalWrite(LCD_DC, HIGH);
-    lcdSelect();
-    lcdSPI.transfer(color >> 8);
-    lcdSPI.transfer(color & 0xFF);
-    lcdDeselect();
-}
-
-static const uint8_t* glyphFor(char c) {
-    if (c < 0x20 || c > 0x7E) {
-        c = '?';
-    }
-
-    return &FONT5X7[(c - 0x20) * 5];
-}
-
-static void drawChar(
-    uint16_t x,
-    uint16_t y,
-    char c,
-    uint16_t color,
-    uint8_t scale = 1
-) {
-    const uint8_t* glyph = glyphFor(c);
-
-    for (uint8_t col = 0; col < 5; ++col) {
-        uint8_t bits = pgm_read_byte(&glyph[col]);
-
-        for (uint8_t row = 0; row < 7; ++row) {
-            if (bits & (1 << row)) {
-                fillRect(
-                    x + col * scale,
-                    y + row * scale,
-                    scale,
-                    scale,
-                    color
-                );
-            }
-        }
-    }
-}
-
-static void drawText(
-    uint16_t x,
-    uint16_t y,
-    const String& text,
-    uint16_t color,
-    uint8_t scale = 1
-) {
-    uint16_t cursorX = x;
-
-    for (size_t i = 0; i < text.length(); ++i) {
-        drawChar(cursorX, y, text[i], color, scale);
-        cursorX += 6 * scale;
-    }
-}
-
-void setDisplayBrightness(uint8_t percent) {
-    if (percent > 100) percent = 100;
-
-    static bool pwmReady = false;
-
-    if (!pwmReady) {
-        ledcSetup(0, 5000, 8);
-        ledcAttachPin(LCD_BL, 0);
-        pwmReady = true;
-    }
-
-    uint8_t duty = map(percent, 0, 100, 0, 255);
-    ledcWrite(0, duty);
-}
-
-void initDisplay() {
-    Serial.println("Display: starting raw ST7789 init");
-
-    pinMode(LCD_CS, OUTPUT);
-    pinMode(LCD_DC, OUTPUT);
-    pinMode(LCD_RST, OUTPUT);
-    pinMode(LCD_BL, OUTPUT);
-
+    digitalWrite(LCD_CS, LOW);
+    lcdSPI.writeBytes(pixels, count * 2);
     digitalWrite(LCD_CS, HIGH);
-    digitalWrite(LCD_BL, LOW);
+    lcdSPI.endTransaction();
+    const uint32_t elapsed = micros() - started;
+    maxFlushUs = max(maxFlushUs, elapsed);
+    totalFlushUs += elapsed;
+    lv_display_flush_ready(disp);
+}
+void readInput(lv_indev_t*, lv_indev_data_t* data) {
+    data->point.x = touchX;
+    data->point.y = touchY;
+    data->state = touchDown ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+void enqueue(const char* name, int value = 0) {
+    if (actionCount == 16) { displayFeedback("Input busy. Try again."); return; }
+    actions[(actionHead + actionCount) % 16] = {name, value};
+    ++actionCount;
+}
+void buttonEvent(lv_event_t* event) {
+    enqueue(static_cast<const char*>(lv_event_get_user_data(event)));
+}
+void sliderEvent(lv_event_t* event) {
+    const auto code = lv_event_get_code(event);
+    const char* name = static_cast<const char*>(lv_event_get_user_data(event));
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        auto* slider = static_cast<lv_obj_t*>(lv_event_get_target(event));
+        enqueue(name, lv_slider_get_value(slider));
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) enqueue("save_settings");
+}
+lv_obj_t* label(lv_obj_t* parent, const char* text, int x, int y, int width,
+                const lv_font_t* font = &lv_font_montserrat_12) {
+    auto* obj = lv_label_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_width(obj, width);
+    lv_obj_set_style_text_font(obj, font, 0);
+    lv_obj_set_style_text_color(obj, lv_color_hex(TEXT), 0);
+    lv_label_set_text(obj, text);
+    return obj;
+}
+lv_obj_t* button(lv_obj_t* parent, int x, int y, int w, int h,
+                 const char* text, const char* action) {
+    auto* obj = lv_button_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, w, h);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(SURFACE), 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(obj, 8, 0);
+    lv_obj_set_style_border_width(obj, 1, 0);
+    lv_obj_set_style_border_color(obj, lv_color_hex(0x354353), 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0x466253), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(obj, lv_color_hex(ACCENT), LV_STATE_PRESSED);
+    auto* caption = label(obj, text, 0, 0, w - 4);
+    lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(caption);
+    lv_obj_add_event_cb(obj, buttonEvent, LV_EVENT_PRESSED, const_cast<char*>(action));
+    return obj;
+}
+lv_obj_t* screen() {
+    auto* obj = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(BACKGROUND), 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    return obj;
+}
+lv_obj_t* slider(lv_obj_t* parent, int y, int minimum, int maximum, const char* action) {
+    auto* obj = lv_slider_create(parent);
+    lv_obj_set_pos(obj, 14, y);
+    lv_obj_set_size(obj, 212, 8);
+    lv_slider_set_range(obj, minimum, maximum);
+    lv_obj_set_ext_click_area(obj, 14);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0x354353), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(obj, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(obj, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(TEXT), LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_radius(obj, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(obj, 5, LV_PART_KNOB);
+    lv_obj_add_event_cb(obj, sliderEvent, LV_EVENT_ALL, const_cast<char*>(action));
+    return obj;
+}
+void createScreens() {
+    home = screen();
+    auto* header = button(home, 0, 0, 240, 28, "", "settings");
+    lv_obj_set_style_radius(header, 0, 0);
+    wifi = label(header, LV_SYMBOL_WIFI, 10, 6, 22);
+    label(header, LV_SYMBOL_SETTINGS, 110, 6, 20);
+    battery = label(header, "--.--V", 136, 6, 94, &lv_font_montserrat_12);
+    lv_obj_set_style_text_align(battery, LV_TEXT_ALIGN_RIGHT, 0);
+    pc = button(home, 8, 36, 108, 30, "PC", "pc");
+    roku = button(home, 124, 36, 108, 30, "Roku", "roku");
+    auto* power = button(home, 8, 74, 70, 32, LV_SYMBOL_POWER " Power", "power");
+    lv_obj_set_style_text_color(lv_obj_get_child(power, 0), lv_color_hex(0xFF9393), 0);
+    button(home, 85, 74, 70, 32, LV_SYMBOL_HOME " Home", "home");
+    button(home, 162, 74, 70, 32, LV_SYMBOL_LEFT " Back", "back");
+    button(home, 88, 113, 64, 34, LV_SYMBOL_UP, "up");
+    button(home, 17, 151, 64, 38, LV_SYMBOL_LEFT, "left");
+    auto* ok = button(home, 88, 151, 64, 38, "OK", "ok");
+    lv_obj_set_style_bg_color(ok, lv_color_hex(ACCENT), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(ok, 0), lv_color_hex(BACKGROUND), 0);
+    button(home, 159, 151, 64, 38, LV_SYMBOL_RIGHT, "right");
+    button(home, 17, 193, 64, 34, LV_SYMBOL_PREV " Prev", "previous");
+    button(home, 88, 193, 64, 34, LV_SYMBOL_DOWN, "down");
+    button(home, 159, 193, 64, 34, "Next " LV_SYMBOL_NEXT, "next");
+    button(home, 8, 235, 70, 32, LV_SYMBOL_LEFT LV_SYMBOL_LEFT, "rewind");
+    button(home, 85, 235, 70, 32, LV_SYMBOL_PLAY "  " LV_SYMBOL_PAUSE, "play_pause");
+    button(home, 162, 235, 70, 32, LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT, "fast_forward");
+    button(home, 8, 275, 70, 36, LV_SYMBOL_VOLUME_MID " -", "volume_down");
+    button(home, 85, 275, 70, 36, "Mute", "mute");
+    button(home, 162, 275, 70, 36, LV_SYMBOL_VOLUME_MAX " +", "volume_up");
 
-    lcdSPI.begin(
-        LCD_SCLK,
-        -1,
-        LCD_MOSI,
-        LCD_CS
-    );
+    settings = screen();
+    button(settings, 0, 0, 75, 36, LV_SYMBOL_LEFT " Back", "show_home");
+    label(settings, "Settings", 92, 10, 130, &lv_font_montserrat_14);
+    label(settings, "Brightness", 14, 56, 145);
+    brightnessValue = label(settings, "", 175, 56, 51);
+    lv_obj_set_style_text_align(brightnessValue, LV_TEXT_ALIGN_RIGHT, 0);
+    brightnessSlider = slider(settings, 82, 0, 100, "brightness");
+    label(settings, "Sleep Timer", 14, 122, 145);
+    sleepValue = label(settings, "", 160, 122, 66);
+    lv_obj_set_style_text_align(sleepValue, LV_TEXT_ALIGN_RIGHT, 0);
+    sleepSlider = slider(settings, 150, 2, 120, "sleep");
+    updateMessage = label(settings, "", 14, 182, 212, &lv_font_montserrat_10);
+    lv_obj_set_height(updateMessage, 28);
+    lv_label_set_long_mode(updateMessage, LV_LABEL_LONG_DOT);
+    button(settings, 20, 215, 200, 40, LV_SYMBOL_DOWNLOAD " Check for updates", "updates");
+    button(settings, 20, 265, 200, 40, LV_SYMBOL_AUDIO " Play Sounds", "sounds");
+    auto* footer = label(settings, "Universal Remote " , 14, 308, 226, &lv_font_montserrat_10);
+    lv_label_set_text_fmt(footer, "Universal Remote %s", RemoteConfig::FIRMWARE_VERSION);
+    lv_obj_set_style_text_color(footer, lv_color_hex(MUTED), 0);
 
-    lcdSPI.beginTransaction(
-        SPISettings(
-            20000000,
-            MSBFIRST,
-            SPI_MODE0
-        )
-    );
+    feedback = label(lv_layer_top(), "", 4, 2, 232, &lv_font_montserrat_12);
+    lv_obj_set_style_bg_color(feedback, lv_color_hex(SURFACE), 0);
+    lv_obj_set_style_bg_opa(feedback, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(feedback, 5, 0);
+    lv_obj_add_flag(feedback, LV_OBJ_FLAG_HIDDEN);
+    lv_screen_load(home);
+}
+}
 
-    digitalWrite(LCD_RST, HIGH);
-    delay(50);
-
-    digitalWrite(LCD_RST, LOW);
-    delay(100);
-
-    digitalWrite(LCD_RST, HIGH);
-    delay(150);
-
-    writeCommand(0x01);
-    delay(150);
-
-    writeCommand(0x11);
-    delay(120);
-
-    writeCommand(0x3A);
-    writeData(0x55);
-
-    // Portrait rotation.
-    writeCommand(0x36);
-    writeData(0xC8);
-
-    writeCommand(0x13);
-    delay(10);
-
-    // Display inversion on
-    writeCommand(0x21);
-    delay(10);
-
-    writeCommand(0x29);
-    delay(100);
-
-    fillScreen(COLOR_BLACK);
-
+bool initDisplay() {
+    pinMode(LCD_CS, OUTPUT); pinMode(LCD_DC, OUTPUT);
+    pinMode(LCD_RST, OUTPUT); pinMode(LCD_BL, OUTPUT);
+    digitalWrite(LCD_CS, HIGH); digitalWrite(LCD_BL, LOW);
+    // Fail before any LVGL object is created. Power/button/audio remain serviceable.
+    auto* buffer = static_cast<uint8_t*>(heap_caps_malloc(240 * 32 * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (!buffer) { Serial.println("Display: cannot allocate 15360-byte render buffer"); return false; }
+    lcdSPI.begin(LCD_SCLK, -1, LCD_MOSI, LCD_CS);
+    lcdSPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(LCD_RST, HIGH); delay(50);
+    digitalWrite(LCD_RST, LOW); delay(100);
+    digitalWrite(LCD_RST, HIGH); delay(150);
+    writeCommand(0x01); delay(150);
+    writeCommand(0x11); lastSleepOutAt = millis(); delay(120);
+    writeCommand(0x3A); writeData(0x55);
+    writeCommand(0x36); writeData(0xC8);
+    writeCommand(0x13); delay(10);
+    writeCommand(0x21); delay(10);
+    writeCommand(0x29); delay(100);
+    lcdSPI.endTransaction();
+    lv_init();
+    lv_tick_set_cb([]() -> uint32_t { return millis(); });
+    display = lv_display_create(SCREEN_W, SCREEN_H);
+    if (!display) { heap_caps_free(buffer); return false; }
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_buffers(display, buffer, nullptr, 240 * 32 * 2, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, flush);
+    input = lv_indev_create();
+    if (!input) { lv_display_delete(display); display = nullptr; heap_caps_free(buffer); return false; }
+    lv_indev_set_type(input, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(input, readInput);
+    lv_timer_set_period(lv_indev_get_read_timer(input), 5);
+    Power::uiActivity();
+    createScreens();
+    ready = true;
+    flushDisplay();
     setDisplayBrightness(70);
-
-    Serial.println("Display: ST7789 init complete");
+    Serial.println("Display: LVGL 9, ST7789 RGB565, 240x32 partial buffer");
+    return true;
 }
-
+void setDisplayBrightness(uint8_t percent) {
+    static bool pwmReady = false;
+    if (!pwmReady) { ledcSetup(0, 5000, 8); ledcAttachPin(LCD_BL, 0); pwmReady = true; }
+    ledcWrite(0, map(constrain(percent, 0, 100), 0, 100, 0, 255));
+}
+void setDisplayTouch(bool pressed, uint16_t x, uint16_t y) {
+    if (pressed != touchDown || (pressed && (x != touchX || y != touchY))) Power::uiActivity();
+    touchDown = pressed; touchX = x; touchY = y;
+}
+void suppressDisplayTouch() {
+    touchDown = false;
+    if (ready) { lv_indev_reset(input, nullptr); lv_indev_wait_release(input); }
+    actionHead = actionCount = 0;
+}
+void serviceDisplay() {
+    if (!ready || panelSleeping || sleepRequested) return;
+    if (feedbackUntil && int32_t(millis() - feedbackUntil) >= 0) {
+        feedbackUntil = 0; lv_obj_add_flag(feedback, LV_OBJ_FLAG_HIDDEN);
+    }
+    const uint32_t started = micros();
+    const uint64_t transferBefore = totalFlushUs;
+    lv_timer_handler();
+    const uint32_t elapsed = micros() - started;
+    const uint32_t transferUs = totalFlushUs - transferBefore;
+    maxServiceUs = max(maxServiceUs, elapsed);
+    // SPI time is bus-limited; do not boost the CPU just for waiting on transfers.
+    Power::observeRender(elapsed > transferUs ? elapsed - transferUs : 0);
+}
+void flushDisplay() { if (ready && !panelSleeping && !sleepRequested) lv_refr_now(display); }
+bool takeDisplayAction(DisplayAction &action) {
+    if (!actionCount) return false;
+    action = actions[actionHead]; actionHead = (actionHead + 1) % 16; --actionCount;
+    return true;
+}
 void updateWifiStatus(bool connected) {
-    fillRect(10, 10, 8, 8, connected ? COLOR_GREEN : COLOR_RED);
+    Power::uiActivity();
+    if (ready) lv_obj_set_style_text_color(wifi, lv_color_hex(connected ? ACCENT : 0xFF9393), 0);
 }
-
-void displayStatus(
-    bool wifiConnected,
-    const String &ipAddress,
-    const String &otaStatus,
-    bool pcSelected
-) {
-    fillScreen(COLOR_BLACK);
-
-    // ---------- STATUS BAR ----------
-    fillRect(0, 0, SCREEN_W, 28, 0x2104);
-
-    updateWifiStatus(wifiConnected);
-
-    // Battery percentage is drawn separately by
-    // updateBatteryStatus() from main.cpp.
-    // ---------- DEVICE SELECTOR ----------
-    updateDeviceSelector(pcSelected);
-
-
-    // ---------- NAVIGATION ----------
-    // Power / Home / Back
-    fillRect(8, 74, 70, 32, 0x18E3);
-    drawText(25, 86, "Power", COLOR_RED, 1);
-
-    fillRect(85, 74, 70, 32, 0x18E3);
-    drawText(105, 86, "Home", COLOR_WHITE, 1);
-
-    fillRect(162, 74, 70, 32, 0x18E3);
-    drawText(183, 86, "Back", COLOR_WHITE, 1);
-
-
-    // ---------- D-PAD ----------
-    // Up
-    fillRect(88, 113, 64, 34, 0x18E3);
-    drawText(117, 125, "^", COLOR_WHITE, 1);
-
-    // Left
-    fillRect(17, 151, 64, 38, 0x18E3);
-    drawText(47, 165, "<", COLOR_WHITE, 1);
-
-    // OK
-    fillRect(88, 151, 64, 38, COLOR_GREEN);
-    drawText(113, 165, "OK", COLOR_BLACK, 1);
-
-    // Right
-    fillRect(159, 151, 64, 38, 0x18E3);
-    drawText(188, 165, ">", COLOR_WHITE, 1);
-
-    // ---------- LOWER D-PAD ROW ----------
-
-    // Previous
-    fillRect(17, 193, 64, 34, 0x18E3);
-    drawText(34, 205, "Prev", COLOR_WHITE, 1);
-
-    // Down
-    fillRect(88, 193, 64, 34, 0x18E3);
-    drawText(117, 205, "v", COLOR_WHITE, 1);
-
-    // Next
-    fillRect(159, 193, 64, 34, 0x18E3);
-    drawText(178, 205, "Next", COLOR_WHITE, 1);
-
-
-    // ---------- MEDIA ----------
-
-    // Rewind
-    fillRect(8, 235, 70, 32, 0x18E3);
-    drawText(30, 247, "<<", COLOR_WHITE, 1);
-
-    // Play / Pause
-    fillRect(85, 235, 70, 32, 0x18E3);
-    drawText(105, 247, ">||", COLOR_WHITE, 1);
-
-    // Fast Forward
-    fillRect(162, 235, 70, 32, 0x18E3);
-    drawText(183, 247, ">>", COLOR_WHITE, 1);
-
-
-    // ---------- AUDIO ----------
-    fillRect(8, 275, 70, 36, 0x18E3);
-    drawText(26, 289, "Vol-", COLOR_WHITE, 1);
-
-    fillRect(85, 275, 70, 36, 0x18E3);
-    drawText(105, 289, "Mute", COLOR_WHITE, 1);
-
-    fillRect(162, 275, 70, 36, 0x18E3);
-    drawText(180, 289, "Vol+", COLOR_WHITE, 1);
+void updateDeviceSelector(bool pcSelected) {
+    if (!ready) return;
+    Power::uiActivity();
+    lv_obj_set_style_bg_color(pc, lv_color_hex(pcSelected ? 0x27523C : SURFACE), 0);
+    lv_obj_set_style_border_color(pc, lv_color_hex(pcSelected ? ACCENT : 0x354353), 0);
+    lv_obj_set_style_bg_color(roku, lv_color_hex(pcSelected ? SURFACE : 0x27523C), 0);
+    lv_obj_set_style_border_color(roku, lv_color_hex(pcSelected ? 0x354353 : ACCENT), 0);
 }
-void displaySettings(
-    uint8_t brightnessPercent,
-    uint16_t sleepSeconds
-) {
-    fillScreen(COLOR_BLACK);
-
-    // Header
-    fillRect(0, 0, SCREEN_W, 36, 0x2104);
-
-    drawText(10, 14, "< Back", COLOR_WHITE, 1);
-    drawText(92, 14, "Settings", COLOR_WHITE, 1);
-
-    // Brightness
-    drawText(14, 60, "Brightness", COLOR_WHITE, 1);
-
-    String brightnessText =
-        String(brightnessPercent) + "%";
-
-    drawText(190, 60, brightnessText, 0xC618, 1);
-
-    // Brightness slider background
-    fillRect(14, 82, 212, 8, 0x4208);
-
-    uint16_t brightnessWidth =
-        ((uint32_t)brightnessPercent * 212) / 100;
-
-    fillRect(
-        14,
-        82,
-        brightnessWidth,
-        8,
-        COLOR_WHITE
-    );
-
-    // Slider thumb
-    uint16_t brightnessX =
-        14 + ((uint32_t)brightnessPercent * 212) / 100;
-
-    if (brightnessX > 225) {
-        brightnessX = 225;
-    }
-
-    fillRect(
-        brightnessX - 3,
-        77,
-        7,
-        18,
-        COLOR_WHITE
-    );
-
-    // Sleep timer
-    drawText(14, 126, "Sleep Timer", COLOR_WHITE, 1);
-
-    String sleepText;
-
-    if (sleepSeconds == 0) {
-        sleepText = "Off";
-    } else {
-        sleepText = String(sleepSeconds) + " sec";
-    }
-
-    drawText(170, 126, sleepText, 0xC618, 1);
-
-    // Sleep slider
-    fillRect(14, 150, 212, 8, 0x4208);
-
-    uint16_t clampedSleep =
-        constrain(sleepSeconds, 2, 120);
-
-    uint16_t sleepWidth =
-        ((uint32_t)(clampedSleep - 2) * 212) / 118;
-
-    fillRect(
-        14,
-        150,
-        sleepWidth,
-        8,
-        COLOR_WHITE
-    );
-
-    uint16_t sleepX = 14 + sleepWidth;
-
-    if (sleepX > 225) {
-        sleepX = 225;
-    }
-
-    fillRect(
-        sleepX - 3,
-        145,
-        7,
-        18,
-        COLOR_WHITE
-    );
-
-    // Manual firmware + SD update, matching the Play Sounds button.
-    fillRect(20, 215, 200, 40, 0x18E3);
-    drawText(69, 230, "Check for updates", COLOR_WHITE, 1);
-
-    // Play Sounds button
-    fillRect(
-    20,
-    265,
-    200,
-    40,
-    0x18E3
-);
-
-drawText(
-    83,
-    280,
-    "Play Sounds",
-    COLOR_WHITE,
-    1
-);
-String footer =
-    "Universal Remote " +
-    String(RemoteConfig::FIRMWARE_VERSION);
-  drawText(
-    14,
-    310,
-    footer.c_str(),
-    0x8410,
-    1
-);
+void displayStatus(bool connected, const String&, const String&, bool pcSelected) {
+    if (!ready) return;
+    suppressDisplayTouch();
+    updateWifiStatus(connected); updateDeviceSelector(pcSelected);
+    lv_screen_load(home);
+}
+void displaySettings(uint8_t brightness, uint16_t sleep) {
+    if (!ready) return;
+    Power::uiActivity();
+    suppressDisplayTouch();
+    updateBrightnessSlider(brightness); updateSleepSlider(sleep);
+    lv_screen_load(settings);
+}
+void updateBrightnessSlider(uint8_t value) {
+    if (!ready) return;
+    Power::uiActivity();
+    lv_slider_set_value(brightnessSlider, value, LV_ANIM_OFF);
+    lv_label_set_text_fmt(brightnessValue, "%u%%", unsigned(value));
+}
+void updateSleepSlider(uint16_t value) {
+    if (!ready) return;
+    Power::uiActivity();
+    lv_slider_set_value(sleepSlider, constrain(value, 2, 120), LV_ANIM_OFF);
+    if (!value) lv_label_set_text(sleepValue, "Off");
+    else lv_label_set_text_fmt(sleepValue, "%u sec", unsigned(value));
+}
+void updateBatteryStatus(uint8_t percent, float volts) {
+    if (!ready) return;
+    Power::uiActivity();
+    percent = constrain(percent, 0, 100);
+    const char* icon = percent > 80 ? LV_SYMBOL_BATTERY_FULL : percent > 60 ? LV_SYMBOL_BATTERY_3 :
+                       percent > 40 ? LV_SYMBOL_BATTERY_2 : percent > 20 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+    char text[32];
+    snprintf(text, sizeof(text), "%.2fV %s", double(volts), icon);
+    lv_label_set_text(battery, text);
+    lv_obj_set_style_text_color(battery, lv_color_hex(percent <= 20 ? 0xFF9393 : TEXT), 0);
 }
 void displayUpdateStatus(const char* message) {
-    fillRect(14, 185, 212, 18, COLOR_BLACK);
-    drawText(14, 190, message, COLOR_WHITE, 1);
+    if (!ready) return;
+    Power::uiActivity();
+    lv_label_set_text(updateMessage, message);
+    // Maintenance calls this outside lv_timer_handler before synchronous work.
+    flushDisplay();
+}
+void displayFeedback(const char* message) {
+    if (!ready) return;
+    Power::uiActivity();
+    lv_label_set_text(feedback, message);
+    lv_obj_remove_flag(feedback, LV_OBJ_FLAG_HIDDEN);
+    feedbackUntil = millis() + 2500;
+}
+void printDisplayStats() {
+    Serial.printf("Display: max service %lu us; max rectangle transfer %lu us; heap %u\n",
+                  (unsigned long)maxServiceUs, (unsigned long)maxFlushUs, ESP.getFreeHeap());
 }
 
-void updateBrightnessSlider(uint8_t brightnessPercent) {
-    // Clear only the dynamic brightness area
-    fillRect(190, 60, 36, 8, COLOR_BLACK);
-    fillRect(14, 77, 212, 18, COLOR_BLACK);
-
-    drawText(14, 60, "Brightness", COLOR_WHITE, 1);
-
-    String valueText = String(brightnessPercent) + "%";
-    drawText(190, 60, valueText, 0xC618, 1);
-
-    // Slider track
-    fillRect(14, 82, 212, 8, 0x4208);
-
-    uint16_t width =
-        ((uint32_t)brightnessPercent * 212) / 100;
-
-    if (width > 0) {
-        fillRect(14, 82, width, 8, COLOR_WHITE);
-    }
-
-    uint16_t thumbX = 14 + width;
-
-    if (thumbX > 225) {
-        thumbX = 225;
-    }
-
-    fillRect(
-        thumbX - 3,
-        77,
-        7,
-        18,
-        COLOR_WHITE
-    );
+void serviceDisplayPower() {
+    if (!ready || !sleepRequested || panelSleeping) return;
+    // ST7789 requires 120 ms between Sleep Out and the next Sleep In.
+    if (millis() - lastSleepOutAt < 120) return;
+    lcdSPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
+    writeCommand(0x28); // display off
+    writeCommand(0x10); // oscillator and panel supplies off; GRAM retained
+    lcdSPI.endTransaction();
+    panelSleeping = true;
+    delay(5); // command settling, per ST7789T3 datasheet
 }
-
-void updateSleepSlider(uint16_t sleepSeconds) {
-    static uint16_t lastThumbX = 14;
-
-    uint16_t value = constrain(
-        sleepSeconds,
-        2,
-        120
-    );
-
-    uint16_t width =
-        ((uint32_t)(value - 2) * 212) / 118;
-
-    uint16_t thumbX = 14 + width;
-
-    if (thumbX > 225) {
-        thumbX = 225;
-    }
-
-    // Update numeric value only
-    fillRect(170, 126, 56, 8, COLOR_BLACK);
-
-    String valueText =
-        String(sleepSeconds) + " sec";
-
-    drawText(
-        170,
-        126,
-        valueText,
-        0xC618,
-        1
-    );
-
-    // Erase old thumb area only
-    fillRect(
-        lastThumbX - 4,
-        144,
-        9,
-        20,
-        COLOR_BLACK
-    );
-
-    // Redraw track
-    fillRect(
-        14,
-        150,
-        212,
-        8,
-        0x4208
-    );
-
-    // Active portion
-    if (width > 0) {
-        fillRect(
-            14,
-            150,
-            width,
-            8,
-            COLOR_WHITE
-        );
-    }
-
-    // New thumb
-    fillRect(
-        thumbX - 3,
-        145,
-        7,
-        18,
-        COLOR_WHITE
-    );
-
-    lastThumbX = thumbX;
-    
+void setDisplaySleeping(bool sleeping) {
+    sleepRequested = sleeping;
+    if (!ready) return;
+    if (sleeping) { setDisplayBrightness(0); serviceDisplayPower(); return; }
+    if (!panelSleeping) return;
+    Power::uiActivity();
+    lcdSPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
+    writeCommand(0x11);
+    lcdSPI.endTransaction();
+    lastSleepOutAt = millis();
+    delay(5); // only Sleep In requires the longer 120 ms exclusion window
+    lcdSPI.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
+    writeCommand(0x29);
+    lcdSPI.endTransaction();
+    panelSleeping = false;
 }
-
-void updateBatteryStatus(uint8_t percent, float volts) {
-    if (percent > 100) percent = 100;
-
-    // Clear only the battery portion of the status bar.
-    fillRect(166, 4, 74, 20, 0x2104);
-
-    String text = String(percent) + "% " + String(volts, 2) + "V";
-
-    drawText(
-        174,
-        9,
-        text,
-        COLOR_WHITE,
-        1
-    );
-}
-
-void updateDeviceSelector(bool pcSelected) {
-    // PC
-    fillRect(
-        8,
-        36,
-        108,
-        30,
-        pcSelected ? COLOR_GREEN : 0x18E3
-    );
-
-    drawText(
-        55,
-        47,
-        "PC",
-        pcSelected ? COLOR_BLACK : COLOR_WHITE,
-        1
-    );
-
-    // Roku
-    fillRect(
-        124,
-        36,
-        108,
-        30,
-        pcSelected ? 0x18E3 : COLOR_GREEN
-    );
-
-    drawText(
-        164,
-        47,
-        "ROKU",
-        pcSelected ? COLOR_WHITE : COLOR_BLACK,
-        1
-    );
-}
+bool isDisplaySleeping() { return !ready || panelSleeping; }

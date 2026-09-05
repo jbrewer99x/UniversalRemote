@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <esp_wifi.h>
 #include <driver/gpio.h>
 
 #include "config.h"
@@ -10,12 +11,14 @@
 #include "secrets.h"
 #include "display.h"
 #include "touch.h"
+#include "ui_policy.h"
 #include "remote_api.h"
 #include "imu.h"
 #include "sd_storage.h"
 #include "sd_updater.h"
 #include "audio_player.h"
 #include "sound_effects.h"
+#include "power_manager.h"
 #define PWR_KEY_PIN 6
 #define PWR_CONTROL_PIN  7
 #define BAT_ADC_PIN      8
@@ -24,7 +27,16 @@
 
 Preferences prefs;
 
-bool wasTouching = false;
+WakeTouchGate wakeTouchGate;
+SavedSetting<uint8_t> savedBrightness;
+SavedSetting<uint16_t> savedSleep;
+enum class Maintenance { None, CheckFirmware, InstallFirmware, Sd, All };
+Maintenance maintenance = Maintenance::None;
+uint32_t maintenanceRequestedAt = 0;
+void saveSettings();
+void requestMaintenance(Maintenance job);
+void serviceMaintenance();
+void handleDisplayActions();
 bool screenSleeping = false;
 bool lightSleepPending = false;
 uint32_t lightSleepRequestedAt = 0;
@@ -35,8 +47,6 @@ static constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
 static constexpr uint32_t SLEEP_PREPARE_TIMEOUT_MS = 10000;
 bool soundTestActive = false;
 bool findRemoteActive = false;
-uint32_t lastRemoteCommandPoll = 0;
-static constexpr uint32_t REMOTE_COMMAND_POLL_INTERVAL_MS = 5000;
 size_t soundTestIndex = 0;
 
 uint32_t lastWifiAttempt = 0;
@@ -113,6 +123,10 @@ bool connectWifi() {
     WiFi.setAutoReconnect(true);
     WiFi.persistent(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // Associated modem sleep retains inbound reachability; do not use MAX_MODEM
+    // or reduce RF transmit power, which could affect latency/range.
+    if (esp_wifi_set_ps(WIFI_PS_MIN_MODEM) != ESP_OK)
+        Serial.println("Power: could not enable Wi-Fi modem sleep");
 
     // WiFi.begin starts association in the background. Never hold up touch,
     // audio, or screen restoration while waiting for an access point.
@@ -183,38 +197,18 @@ void refreshBatteryStatus() {
 
 
 void serviceRemoteCommands() {
-    uint32_t now = millis();
-
-    if (
-        now - lastRemoteCommandPoll <
-        REMOTE_COMMAND_POLL_INTERVAL_MS
-    ) {
-        return;
-    }
-
-    lastRemoteCommandPoll = now;
-
-    if (WiFi.status() != WL_CONNECTED) {
-        return;
-    }
-
-    String command;
-
-    if (!checkRemoteCommand(command)) {
-        return;
-    }
-
-    if (command.length() == 0) {
-        return;
-    }
-
-    Serial.printf(
-        "Remote API: received command: %s\n",
-        command.c_str()
-    );
-
-    if (command == "find_remote") {
-        startFindRemote();
+    RemoteResult result;
+    while (takeRemoteResult(result)) {
+        if (!result.success) {
+            // Poll backoff is silent; explicit user commands get visible feedback.
+            if (!result.poll) {
+                displayFeedback(result.expired ? "Command expired. Try again." : "Command failed. Check connection.");
+                reportErrorSound();
+            }
+        } else if (result.poll && !strcmp(result.command, "find_remote") &&
+                   !lowBatteryShutdownPending && !lightSleepPending) {
+            startFindRemote();
+        }
     }
 }
 
@@ -252,6 +246,8 @@ void serviceFindRemote(bool motionDetected) {
 }
 
 void showHome() {
+    saveSettings();
+    wakeTouchGate.suppress();
     currentScreen = ScreenMode::Home;
     displayStatus(
         WiFi.status() == WL_CONNECTED,
@@ -263,6 +259,7 @@ void showHome() {
 }
 
 void showSettings() {
+    wakeTouchGate.suppress();
     currentScreen = ScreenMode::Settings;
     displaySettings(uiBrightness, uiSleepSeconds);
     refreshBatteryStatus();
@@ -289,18 +286,28 @@ void primeImuBaseline() {
 void enterScreenSleep() {
     if (screenSleeping) return;
 
+    saveSettings();
+    suppressDisplayTouch();
+    wakeTouchGate.suppress();
     screenSleeping = true;
+    Power::setScreenOff(true);
+    setRemoteScreenOff(true);
     sleepStartedAt = millis();
     primeImuBaseline();
 
     Serial.printf("Sleep: screen off after %u sec inactivity\n", uiSleepSeconds);
     setDisplayBrightness(0);
+    setDisplaySleeping(true);
 }
 
 void wakeScreen(const char* reason) {
     if (!screenSleeping) return;
 
     screenSleeping = false;
+    Power::setScreenOff(false);
+    Power::uiActivity();
+    setRemoteScreenOff(false);
+    setDisplaySleeping(false);
     uint8_t wakeBrightness = uiBrightness == 0 ? 1 : uiBrightness;
     setDisplayBrightness(wakeBrightness);
     noteActivity();
@@ -335,6 +342,7 @@ void enterLightSleep() {
         isAudioPlaying() || lowBatteryShutdownPending) return;
 
     enterScreenSleep();
+    pauseRemoteNetwork();
     lightSleepPending = true;
     lightSleepRequestedAt = millis();
     Serial.println("Sleep: preparing; waiting for audio and button release");
@@ -352,10 +360,11 @@ void serviceLightSleep() {
         stopAudio();
         lightSleepPending = false;
         reportErrorSound();
+        resumeRemoteNetwork();
         wakeScreen("sleep preparation timed out");
         return;
     }
-    if (isAudioPlaying() || !released) return;
+    if (isAudioPlaying() || !released || !remoteNetworkIdle() || !isDisplaySleeping()) return;
 
     const gpio_num_t pin = (gpio_num_t)WAKE_BUTTON_PIN;
     esp_err_t result = gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
@@ -366,15 +375,20 @@ void serviceLightSleep() {
         lightSleepPending = false;
         Serial.printf("Sleep: wake configuration failed: %d\n", (int)result);
         reportErrorSound();
+        resumeRemoteNetwork();
         wakeScreen("wake configuration failed");
         return;
     }
 
+    setTouchSleeping(true);
+    setImuSleeping(true);
+    Power::beforeLightSleep();
     WiFi.disconnect(false, false);
     WiFi.mode(WIFI_OFF);
     Serial.printf("Sleep: entering light sleep; GPIO%d=%d\n",
                   WAKE_BUTTON_PIN, digitalRead(WAKE_BUTTON_PIN));
     result = esp_light_sleep_start();
+    Power::afterLightSleep();
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     gpio_wakeup_disable(pin);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
@@ -384,8 +398,12 @@ void serviceLightSleep() {
     wakeButtonArmed = false;
     wakeButtonRawDown = digitalRead(WAKE_BUTTON_PIN) == LOW;
     wakeButtonChangedAt = millis();
-    wasTouching = true;
+    wakeTouchGate.suppress();
+    suppressDisplayTouch();
     wakeScreen(result == ESP_OK ? "power button" : "sleep failed");
+    setTouchSleeping(false);
+    if (!setImuSleeping(false)) initImu();
+    primeImuBaseline();
     Serial.printf("Sleep: returned result=%d cause=%d GPIO%d=%d\n",
                   (int)result, (int)cause, WAKE_BUTTON_PIN,
                   digitalRead(WAKE_BUTTON_PIN));
@@ -396,6 +414,7 @@ void serviceLightSleep() {
         reportErrorSound();
     }
     connectWifi();
+    resumeRemoteNetwork();
 }
 
 bool imuWakeMotionDetected() {
@@ -456,6 +475,10 @@ bool imuWakeMotionDetected() {
 }
 
 void printInfo() {
+    Power::printStats();
+    Serial.printf("Power: screen-off poll interval=%lu ms\n",
+                  (unsigned long)RemoteConfig::SCREEN_OFF_POLL_INTERVAL_MS);
+    printDisplayStats();
     Serial.printf("Firmware: %s\n", RemoteConfig::FIRMWARE_VERSION);
     Serial.println("Updates: manual (Settings > Check for updates)");
     Serial.printf("Wi-Fi: %s\n", WiFi.status() == WL_CONNECTED ? "connected" : "disconnected");
@@ -475,10 +498,7 @@ void printInfo() {
 }
 
 void checkUpdate(bool install) {
-    auto result = OtaClient::check(install);
-    Serial.print("OTA: ");
-    Serial.println(result.message);
-    
+    requestMaintenance(install ? Maintenance::InstallFirmware : Maintenance::CheckFirmware);
 }
 
 void serialConsole() {
@@ -494,7 +514,7 @@ else if (c == 'p') {
     );
 }
 else if (c == 's') {
-    SdUpdater::check();
+    requestMaintenance(Maintenance::Sd);
 }
 else if (c == 'r') {
         ESP.restart();
@@ -506,103 +526,13 @@ else if (c == 'r') {
 }
 
 void sendSelectedCommand(const char* command) {
-    const char* device = selectedDeviceName();
-    Serial.printf("UI: %s -> %s\n", device, command);
-    sendRemoteCommand(device, command);
-}
-
-void handleHomeTap(uint16_t x, uint16_t y) {
-    if (y < 28) {
-        Serial.println("UI: opening Settings");
-        showSettings();
-        return;
+    const auto result = queueRemoteCommand(selectedDeviceName(), command);
+    if (result != RemoteNetwork::Submit::Accepted) {
+        displayFeedback(result == RemoteNetwork::Submit::Offline ? "Wi-Fi offline. Try again." :
+                        result == RemoteNetwork::Submit::Full ? "Command queue full. Try again." :
+                        "Remote busy. Try again.");
+        reportErrorSound();
     }
-
-    if (x >= 8 && x <= 116 && y >= 36 && y <= 66) {
-        playSoundEffect(SoundEffect::PcSelected);
-        selectedDevice = RemoteDevice::PC;
-        Serial.println("UI: selected PC");
-        updateDeviceSelector(true);
-        return;
-    }
-
-    if (x >= 124 && x <= 232 && y >= 36 && y <= 66) {
-        playSoundEffect(SoundEffect::RokuSelected);
-        selectedDevice = RemoteDevice::Roku;
-        Serial.println("UI: selected Roku");
-        updateDeviceSelector(false);
-        return;
-    }
-
-    if (x >= 8 && x <= 78 && y >= 74 && y <= 106) sendSelectedCommand("power");
-    else if (x >= 85 && x <= 155 && y >= 74 && y <= 106) sendSelectedCommand("home");
-    else if (x >= 162 && x <= 232 && y >= 74 && y <= 106) sendSelectedCommand("back");
-    else if (x >= 88 && x <= 152 && y >= 113 && y <= 147) sendSelectedCommand("up");
-    else if (x >= 17 && x <= 81 && y >= 151 && y <= 189) sendSelectedCommand("left");
-    else if (x >= 88 && x <= 152 && y >= 151 && y <= 189) sendSelectedCommand("ok");
-    else if (x >= 159 && x <= 223 && y >= 151 && y <= 189) sendSelectedCommand("right");
-    // Previous
-else if (
-    x >= 17 &&
-    x <= 81 &&
-    y >= 193 &&
-    y <= 227
-) {
-    sendSelectedCommand("previous");
-}
-
-// Down
-else if (
-    x >= 88 &&
-    x <= 152 &&
-    y >= 193 &&
-    y <= 227
-) {
-    sendSelectedCommand("down");
-}
-
-// Next
-else if (
-    x >= 159 &&
-    x <= 223 &&
-    y >= 193 &&
-    y <= 227
-) {
-    sendSelectedCommand("next");
-}
-
-// Rewind
-else if (
-    x >= 8 &&
-    x <= 78 &&
-    y >= 235 &&
-    y <= 267
-) {
-    sendSelectedCommand("rewind");
-}
-
-// Play / Pause
-else if (
-    x >= 85 &&
-    x <= 155 &&
-    y >= 235 &&
-    y <= 267
-) {
-    sendSelectedCommand("play_pause");
-}
-
-// Fast Forward
-else if (
-    x >= 162 &&
-    x <= 232 &&
-    y >= 235 &&
-    y <= 267
-) {
-    sendSelectedCommand("fast_forward");
-}
-    else if (x >= 8 && x <= 78 && y >= 275 && y <= 311) sendSelectedCommand("volume_down");
-    else if (x >= 85 && x <= 155 && y >= 275 && y <= 311) sendSelectedCommand("mute");
-    else if (x >= 162 && x <= 232 && y >= 275 && y <= 311) sendSelectedCommand("volume_up");
 }
 
 void checkSettingsUpdates() {
@@ -640,47 +570,96 @@ void checkSettingsUpdates() {
     noteActivity();
 }
 
-void handleSettingsTap(uint16_t x, uint16_t y) {
-    if (y < 36 && x < 75) {
-        Serial.println("UI: returning Home");
-        showHome();
-        return;
+void saveSettings() {
+    if (savedBrightness.needsSave(uiBrightness)) {
+        const bool ok = prefs.putUChar("brightness", uiBrightness) != 0;
+        savedBrightness.committed(uiBrightness, ok);
+        if (!ok) { reportErrorSound(); displayFeedback("Could not save brightness."); }
     }
-
-    if (x >= 14 && x <= 226 && y >= 70 && y <= 105) {
-        int value = map(x, 14, 226, 0, 100);
-        uiBrightness = constrain(value, 0, 100);
-        setDisplayBrightness(uiBrightness);
-        updateBrightnessSlider(uiBrightness);
-        if (!prefs.putUChar("brightness", uiBrightness)) reportErrorSound();
-        Serial.printf("UI: brightness = %u%%\n", uiBrightness);
-        return;
+    if (savedSleep.needsSave(uiSleepSeconds)) {
+        const bool ok = prefs.putUShort("sleep_sec", uiSleepSeconds) != 0;
+        savedSleep.committed(uiSleepSeconds, ok);
+        if (!ok) { reportErrorSound(); displayFeedback("Could not save sleep timer."); }
     }
-
-    if (x >= 14 && x <= 226 && y >= 138 && y <= 175) {
-        int value = map(x, 14, 226, 2, 120);
-        uiSleepSeconds = constrain(value, 2, 120);
-        updateSleepSlider(uiSleepSeconds);
-        if (!prefs.putUShort("sleep_sec", uiSleepSeconds)) reportErrorSound();
-        noteActivity();
-        Serial.printf("UI: sleep timer = %u sec\n", uiSleepSeconds);
-        return;
-    }
-    // Match the new button's rectangle immediately above Play Sounds.
-    if (x >= 20 && x < 220 && y >= 215 && y < 255) {
-        checkSettingsUpdates();
-        return;
-    }
-    // Play Sounds
-    if (
-        x >= 20 &&
-        x <= 220 &&
-        y >= 265 &&
-        y <= 305
-)   {
-    startSoundTest();
-    return;
 }
+
+void requestMaintenance(Maintenance job) {
+    if (maintenance != Maintenance::None || lightSleepPending || lowBatteryShutdownPending) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        displayFeedback("Wi-Fi offline. Try again.");
+        reportErrorSound();
+        return;
+    }
+    wakeScreen("update");
+    if (lowBatteryShutdownPending) return;
+    saveSettings();
+    maintenance = job;
+    maintenanceRequestedAt = millis();
+    pauseRemoteNetwork();
+    suppressDisplayTouch();
+    wakeTouchGate.suppress();
+    showSettings();
+    displayUpdateStatus("Preparing update...");
+}
+
+void serviceMaintenance() {
+    if (maintenance == Maintenance::None) return;
+    // Wait over loop iterations while audio, power checks, and rendering are serviced.
+    if (lowBatteryShutdownPending || millis() - maintenanceRequestedAt >= 5000) {
+        maintenance = Maintenance::None;
+        resumeRemoteNetwork();
+        displayUpdateStatus("Update postponed. Try again.");
+        noteActivity();
+        return;
+    }
+    if (!remoteNetworkIdle()) return;
+    Power::HeavyWork performance;
+    const auto job = maintenance;
+    soundTestActive = findRemoteActive = false;
+    stopAudio();
+    setAudioVolume(DEFAULT_VOLUME);
+    if (job == Maintenance::All) checkSettingsUpdates();
+    else if (job == Maintenance::Sd) {
+        displayUpdateStatus("Updating SD content...");
+        const bool ok = SdUpdater::check();
+        displayUpdateStatus(ok ? "SD content ready." : "SD update failed. Try again.");
+    } else {
+        displayUpdateStatus("Checking firmware...");
+        const auto result = OtaClient::check(job == Maintenance::InstallFirmware);
+        Serial.printf("OTA: %s\n", result.message.c_str());
+        displayUpdateStatus(result.message.c_str());
+    }
+    maintenance = Maintenance::None;
+    resumeRemoteNetwork();
+    suppressDisplayTouch();
+    wakeTouchGate.suppress();
+    noteActivity();
+}
+
+void handleDisplayActions() {
+    DisplayAction action;
+    while (takeDisplayAction(action)) {
+        const char* name = action.name;
+        noteActivity();
+        if (!strcmp(name, "settings")) showSettings();
+        else if (!strcmp(name, "show_home")) showHome();
+        else if (!strcmp(name, "pc") || !strcmp(name, "roku")) {
+            const bool choosePc = !strcmp(name, "pc");
+            selectedDevice = choosePc ? RemoteDevice::PC : RemoteDevice::Roku;
+            updateDeviceSelector(choosePc);
+            playSoundEffect(choosePc ? SoundEffect::PcSelected : SoundEffect::RokuSelected);
+        } else if (!strcmp(name, "brightness")) {
+            uiBrightness = constrain(action.value, 0, 100);
+            setDisplayBrightness(uiBrightness);
+            updateBrightnessSlider(uiBrightness);
+        } else if (!strcmp(name, "sleep")) {
+            uiSleepSeconds = constrain(action.value, 2, 120);
+            updateSleepSlider(uiSleepSeconds);
+        } else if (!strcmp(name, "save_settings")) saveSettings();
+        else if (!strcmp(name, "updates")) requestMaintenance(Maintenance::All);
+        else if (!strcmp(name, "sounds")) startSoundTest();
+        else sendSelectedCommand(name);
+    }
 }
 
 void setup() {
@@ -688,6 +667,7 @@ void setup() {
     digitalWrite(PWR_CONTROL_PIN, HIGH);
     pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
     Serial.begin(115200);
+    Power::begin();
     delay(1000);
 
     Serial.printf("\nUniversal Remote ESP32 Bootstrap %s\n",
@@ -700,7 +680,9 @@ void setup() {
     uiBrightness = prefs.getUChar("brightness", 75);
     uiSleepSeconds = prefs.getUShort("sleep_sec", 30);
 
-    initDisplay();
+    savedBrightness.saved = uiBrightness;
+    savedSleep.saved = uiSleepSeconds;
+    if (!initDisplay()) reportErrorSound();
     setDisplayBrightness(uiBrightness);
     initTouch();
     initImu();
@@ -717,11 +699,14 @@ void setup() {
     initAudio();
     playSoundEffect(SoundEffect::Startup);
     finishAudioPlayback();
+    if (!initRemoteNetwork()) reportErrorSound();
     showHome(); // Battery warnings now run after audio and SD are ready.
     noteActivity();
 }
 
 void loop() {
+    Power::service();
+    serviceDisplayPower();
     serviceAudio();
     if (lowBatteryShutdownPending) {
         serviceLowBatteryShutdown();
@@ -730,13 +715,21 @@ void loop() {
     }
     serialConsole();
     const bool buttonPressed = pollWakeButton();
-    if (buttonPressed && !lightSleepPending) enterLightSleep();
+    if (buttonPressed && !lightSleepPending && maintenance == Maintenance::None) enterLightSleep();
     if (lightSleepPending) {
         serviceLightSleep();
         delay(5);
         return; // Resample touch and time after sleep; never use pre-sleep input.
     }
 
+    if (maintenance != Maintenance::None) {
+        readTouch(); // Drain reports so touches during maintenance cannot become commands.
+        serviceDisplay();
+        serviceMaintenance();
+        delay(5);
+        return;
+    }
+    serviceRemoteCommands();
     static bool displayedWifiConnected = false;
     const bool wifiConnected = WiFi.status() == WL_CONNECTED;
     if (!screenSleeping && currentScreen == ScreenMode::Home &&
@@ -755,50 +748,28 @@ void loop() {
     serviceSoundTest();
     serviceLowBatteryShutdown();
     if (screenSleeping) {
-    if (point.touched) {
-        wakeScreen("touch");
-        wasTouching = true;
-    } else if (imuMotion) {
-        wakeScreen("motion");
-    }
-
-        if (!point.touched) {
-            wasTouching = false;
-        }
-
-        // After a full hour without activity, enter true light sleep.
+        if (point.touched) {
+            wakeScreen("touch");
+            wakeTouchGate.suppress();
+        } else if (imuMotion) wakeScreen("motion");
+        wakeTouchGate.accept(point.touched);
         if (screenSleeping && now - lastActivityAt >= LIGHT_SLEEP_AFTER_MS) {
             enterLightSleep();
             now = millis();
         }
     } else {
-        if (point.touched) {
-            noteActivity();
-        }
-
-        bool newTap = point.touched && !wasTouching;
-
-        if (newTap) {
-            if (currentScreen == ScreenMode::Home) {
-                handleHomeTap(point.x, point.y);
-            } else if (currentScreen == ScreenMode::Settings) {
-                handleSettingsTap(point.x, point.y);
-            }
-        }
-
-        wasTouching = point.touched;
-
-        if (
-            uiSleepSeconds > 0 &&
-            millis() - lastActivityAt >= ((uint32_t)uiSleepSeconds * 1000UL)
-        ) {
-            enterScreenSleep();
-        }
+        if (point.touched) noteActivity();
+        setDisplayTouch(wakeTouchGate.accept(point.touched), point.x, point.y);
+        serviceDisplay();
+        handleDisplayActions();
+        if (uiSleepSeconds > 0 && maintenance == Maintenance::None &&
+            millis() - lastActivityAt >= uint32_t(uiSleepSeconds) * 1000UL) enterScreenSleep();
     }
 
     if (
         WiFi.status() != WL_CONNECTED &&
-        now - lastWifiAttempt >= RemoteConfig::WIFI_RETRY_INTERVAL_MS
+        now - lastWifiAttempt >= (screenSleeping ? RemoteConfig::SCREEN_OFF_WIFI_RETRY_INTERVAL_MS :
+                                                  RemoteConfig::WIFI_RETRY_INTERVAL_MS)
     ) {
         lastWifiAttempt = now;
         connectWifi();
@@ -815,8 +786,8 @@ void loop() {
     if (!lowBatteryShutdownPending && !lightSleepPending &&
         !findRemoteActive && !soundTestActive) serviceErrorSound();
 
-    // Give local input and audio priority over the synchronous network poll.
-    if (!lightSleepPending && !isAudioPlaying()) serviceRemoteCommands();
+    setRemotePolling(!lightSleepPending && !lowBatteryShutdownPending &&
+                     maintenance == Maintenance::None && !isAudioPlaying());
 
     // Slower loop while the display is dark.
     delay(screenSleeping ? 20 : 5);
@@ -826,6 +797,8 @@ void serviceLowBatteryShutdown() {
         return;
     }
 
+    pauseRemoteNetwork();
+    saveSettings();
     // Let serviceAudio() finish playing the shutdown message.
     if (isAudioPlaying()) {
         return;

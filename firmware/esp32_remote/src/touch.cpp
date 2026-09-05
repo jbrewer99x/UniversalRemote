@@ -4,6 +4,7 @@
 #include <TouchDrv.hpp>
 
 #include "touch.h"
+#include "ui_policy.h"
 
 #define TP_SDA   1
 #define TP_SCL   3
@@ -14,6 +15,9 @@
 static TwoWire touchWire = TwoWire(0);
 static TouchDrvCST3530 touch;
 static bool touchReady = false;
+static bool touchSleeping = false;
+static TouchState touchState;
+static RemoteTouchPoint lastPoint = {false, 0, 0};
 
 bool initTouch() {
     Serial.println("Touch: initializing CST3530");
@@ -48,48 +52,28 @@ bool initTouch() {
 }
 
 RemoteTouchPoint readTouch() {
-    RemoteTouchPoint result = {
-        false,
-        0,
-        0
-    };
-
-    if (!touchReady) {
-        return result;
+    if (!touchReady || touchSleeping) return {false, 0, 0};
+    auto sample = TouchState::Sample::None;
+    // CST3530 reports data-ready, not finger-down, on IRQ. Retain a press
+    // between reports; SensorLib filters the controller's release events.
+    if (digitalRead(TP_INT) == LOW) {
+        const auto &points = touch.getTouchPoints();
+        if (points.hasPoints()) {
+            const auto &point = points.getPoint(0);
+            lastPoint.x = 239 - constrain(point.x, 0, 239);
+            lastPoint.y = 319 - constrain(point.y, 0, 319);
+            sample = TouchState::Sample::Down;
+        } else sample = TouchState::Sample::Up;
     }
+    lastPoint.touched = touchState.update(sample, millis());
+    return lastPoint;
+}
 
-    // IRQ is active LOW. Don't hit I2C unless the controller
-    // indicates that touch data is available.
-    if (digitalRead(TP_INT) != LOW) {
-        return result;
-    }
-
-    const TouchPoints &points = touch.getTouchPoints();
-
-    if (!points.hasPoints()) {
-        return result;
-    }
-
-    const auto &pt = points.getPoint(0);
-
-    result.touched = true;
-    result.x = 239 - constrain(pt.x, 0, 239);
-    result.y = 319 - constrain(pt.y, 0, 319);
-
-    static uint32_t lastPrint = 0;
-    uint32_t now = millis();
-
-    // Throttle serial output while dragging.
-    if (now - lastPrint >= 50) {
-        Serial.printf(
-            "Touch: x=%u y=%u points=%u\n",
-            result.x,
-            result.y,
-            points.getPointCount()
-        );
-
-        lastPrint = now;
-    }
-
-    return result;
+void setTouchSleeping(bool sleeping) {
+    if (!touchReady || sleeping == touchSleeping) return;
+    if (sleeping) touch.sleep();
+    else touch.wakeup();
+    touchSleeping = sleeping;
+    touchState = TouchState{};
+    lastPoint = {false, 0, 0};
 }

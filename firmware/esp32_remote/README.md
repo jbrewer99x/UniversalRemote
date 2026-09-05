@@ -1,8 +1,10 @@
-# Universal Remote ESP32 Firmware 0.2.0
+# Universal Remote ESP32 Firmware
 
 Target: Waveshare ESP32-S3-Touch-LCD-2.8 V2 (SKU 27690).
 
-Version 0.2.0 represents the first functional handheld Universal Remote firmware. The ESP32-S3 now provides a standalone touchscreen remote interface backed by the Universal Remote server API.
+The ESP32-S3 provides a standalone touchscreen remote interface backed by the Universal Remote server API. The current version is defined in `include/config.h`.
+
+The interface now uses pinned LVGL 9.2.2 with the existing Home/Settings layout, a polished dark theme, buffered partial redraws, and draggable sliders. Normal remote HTTP traffic runs in a background worker. See [UI implementation and hardware validation](../../docs/firmware-ui.md) and [host tests](tests/README.md).
 
 ## Current functionality
 

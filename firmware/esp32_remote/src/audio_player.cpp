@@ -5,12 +5,17 @@
 
 #include "audio_player.h"
 #include "sd_storage.h"
+#include "power_manager.h"
+#include "power_policy.h"
 
 #define I2S_DOUT 47
 #define I2S_BCLK 48
 #define I2S_LRC  38
 
 static Audio audio;
+static bool audioReady = false;
+static bool outputClockRunning = true; // Audio constructor installs/starts I2S.
+static Power::AudioTail tail;
 
 bool initAudio() {
     Serial.println("Audio: initializing");
@@ -25,12 +30,15 @@ bool initAudio() {
         DEFAULT_VOLUME
     );
 
-    Serial.println("Audio: ready");
+    audioReady = true;
+    stopAudio(); // Idle DMA/I2S need not keep the amplifier clocked.
+    Serial.println("Audio: ready (output clocks stopped)");
 
     return true;
 }
 
 bool playWav(const char* path) {
+    if (!audioReady) return false;
     if (!isSdCardReady()) {
         Serial.println(
             "Audio: SD card unavailable"
@@ -50,6 +58,16 @@ bool playWav(const char* path) {
         return false;
     }
 
+    Power::setAudioActive(true);
+    tail.clear();
+    if (!outputClockRunning) {
+        if (i2s_start(I2S_NUM_0) != ESP_OK) {
+            Power::setAudioActive(false);
+            reportErrorSound();
+            return false;
+        }
+        outputClockRunning = true;
+    }
     Serial.printf(
         "Audio: playing %s\n",
         path
@@ -61,6 +79,7 @@ bool playWav(const char* path) {
     );
 
     if (!ok) {
+        stopAudio();
         Serial.println(
             "Audio: failed to open file"
         );
@@ -73,7 +92,13 @@ bool playWav(const char* path) {
 }
 
 void serviceAudio() {
+    if (!audioReady || !outputClockRunning) return;
     audio.loop();
+    if (audio.isRunning()) tail.clear();
+    else {
+        if (!tail.started()) tail.start(millis(), audio.getSampleRate());
+        if (!tail.active(millis())) stopAudio();
+    }
 }
 
 void setAudioVolume(uint8_t volume) {
@@ -90,14 +115,21 @@ void setAudioVolume(uint8_t volume) {
 }
 
 bool isAudioPlaying() {
-    return audio.isRunning();
+    return audioReady && (audio.isRunning() || tail.started());
 }
 void stopAudio() {
+    if (!audioReady) return;
     // stopSong clears decoder buffers even after isRunning() becomes false.
     audio.stopSong();
 #if ESP_IDF_VERSION_MAJOR < 5
     i2s_zero_dma_buffer(I2S_NUM_0);
 #endif
+    tail.clear();
+    if (outputClockRunning) {
+        if (i2s_stop(I2S_NUM_0) == ESP_OK) outputClockRunning = false;
+        else Serial.println("Audio: failed to stop I2S output clock");
+    }
+    Power::setAudioActive(outputClockRunning);
 }
 
 void finishAudioPlayback() {
@@ -107,11 +139,6 @@ void finishAudioPlayback() {
         delay(1);
     }
     if (isAudioPlaying()) reportErrorSound();
-    if (!isAudioPlaying()) {
-        // The bundled driver has 16 DMA buffers of 512 stereo frames.
-        // EOF describes decoder completion, not the last audible sample.
-        const uint32_t rate = audio.getSampleRate();
-        if (rate >= 8000) delay((16UL * 512UL * 1000UL + rate - 1) / rate + 10);
-    }
+    // serviceAudio keeps isAudioPlaying true until the DMA tail has drained.
     stopAudio();
 }

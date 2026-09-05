@@ -10,3 +10,4 @@ struct RemoteTouchPoint {
 
 bool initTouch();
 RemoteTouchPoint readTouch();
+void setTouchSleeping(bool sleeping);

@@ -2,3 +2,4 @@
 
 bool initImu();
 bool readImuAcceleration(float &x, float &y, float &z);
+bool setImuSleeping(bool sleeping);
