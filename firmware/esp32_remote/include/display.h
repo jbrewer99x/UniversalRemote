@@ -17,7 +17,7 @@ void printDisplayStats();
 void setDisplaySleeping(bool sleeping);
 void serviceDisplayPower();
 bool isDisplaySleeping();
-void updateWifiStatus(bool connected);
+void updateWifiStatus(bool connected, int rssi = 0);
 void updateDeviceSelector(bool pcSelected);
 void displayStatus(
     bool wifiConnected,

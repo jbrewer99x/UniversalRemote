@@ -28,7 +28,7 @@ class GoveeLANGroup:
         self._power_follow_task: asyncio.Task | None = None
         self._last_leader_power: bool | None = None
 
-        self.crazy_mode_interval = 0.2
+        self.crazy_mode_interval = 0.5
         self._crazy_mode_task: asyncio.Task | None = None
 
     def describe(self) -> dict[str, Any]:

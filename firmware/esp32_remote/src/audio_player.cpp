@@ -134,6 +134,9 @@ void stopAudio() {
 
 void finishAudioPlayback() {
     const uint32_t started = millis();
+    // Allow CPU to exit idle/power optimization before starting audio drain.
+    // This prevents audio hitches caused by CPU waking up late after screen-off.
+    delay(20);
     while (isAudioPlaying() && millis() - started < 15000) {
         serviceAudio();
         delay(1);

@@ -16,6 +16,7 @@ SPIClass lcdSPI(FSPI);
 lv_display_t* display = nullptr;
 lv_indev_t* input = nullptr;
 lv_obj_t *home, *settings, *lights, *wifi, *battery, *pc, *roku;
+int8_t displayedWifiLevel = -1;
 lv_obj_t *brightnessSlider, *sleepSlider, *brightnessValue, *sleepValue;
 lv_obj_t *lightBrightnessSlider, *lightTemperatureSlider, *lightBrightnessValue, *lightTemperatureValue;
 lv_obj_t *updateMessage, *feedback;
@@ -156,11 +157,56 @@ lv_obj_t* slider(lv_obj_t* parent, int y, int minimum, int maximum, const char* 
     lv_obj_add_event_cb(obj, sliderEvent, LV_EVENT_ALL, const_cast<char*>(action));
     return obj;
 }
+// One small draw object: no bitmaps, extra widgets, or animation timer.
+void drawWifiIcon(lv_event_t* event) {
+    lv_area_t area;
+    lv_obj_get_coords(wifi, &area);
+    auto* layer = lv_event_get_layer(event);
+    if (displayedWifiLevel <= 0) {
+        lv_draw_line_dsc_t line;
+        lv_draw_line_dsc_init(&line);
+        line.color = lv_color_hex(0xFF4040);
+        line.width = 2;
+        line.round_start = line.round_end = 1;
+        line.p1 = {area.x1 + 5, area.y1 + 3};
+        line.p2 = {area.x1 + 17, area.y1 + 15};
+        lv_draw_line(layer, &line);
+        line.p1.y = area.y1 + 15;
+        line.p2.y = area.y1 + 3;
+        lv_draw_line(layer, &line);
+        return;
+    }
+    lv_draw_arc_dsc_t arc;
+    lv_draw_arc_dsc_init(&arc);
+    arc.center = {area.x1 + 11, area.y1 + 16};
+    arc.start_angle = 225;
+    arc.end_angle = 315;
+    arc.width = 2;
+    arc.rounded = 1;
+    for (int i = 0; i < 3; ++i) {
+        arc.radius = 6 + i * 4;
+        arc.color = lv_color_hex(i < displayedWifiLevel ? ACCENT : 0x354353);
+        lv_draw_arc(layer, &arc);
+    }
+    lv_draw_rect_dsc_t dot;
+    lv_draw_rect_dsc_init(&dot);
+    dot.bg_color = lv_color_hex(ACCENT);
+    dot.bg_opa = LV_OPA_COVER;
+    dot.radius = LV_RADIUS_CIRCLE;
+    lv_area_t dotArea = {area.x1 + 10, area.y1 + 15, area.x1 + 12, area.y1 + 17};
+    lv_draw_rect(layer, &dot, &dotArea);
+}
 void createScreens() {
     home = screen();
     auto* header = button(home, 0, 0, 240, 28, "", "settings");
     lv_obj_set_style_radius(header, 0, 0);
-    wifi = label(header, LV_SYMBOL_WIFI, 10, 6, 22);
+    wifi = lv_obj_create(header);
+    lv_obj_remove_style_all(wifi);
+    lv_obj_remove_flag(wifi, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(wifi, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(wifi, 10, 4);
+    lv_obj_set_size(wifi, 23, 19);
+    lv_obj_add_event_cb(wifi, drawWifiIcon, LV_EVENT_DRAW_MAIN, nullptr);
     label(header, LV_SYMBOL_SETTINGS, 110, 6, 20);
     battery = label(header, "--.--V", 136, 6, 94, &lv_font_montserrat_12);
     lv_obj_set_style_text_align(battery, LV_TEXT_ALIGN_RIGHT, 0);
@@ -312,9 +358,22 @@ bool takeDisplayAction(DisplayAction &action) {
     action = actions[actionHead]; actionHead = (actionHead + 1) % 16; --actionCount;
     return true;
 }
-void updateWifiStatus(bool connected) {
-    Power::uiActivity();
-    if (ready) lv_obj_set_style_text_color(wifi, lv_color_hex(connected ? ACCENT : 0xFF9393), 0);
+void updateWifiStatus(bool connected, int rssi) {
+    // Background status must neither touch the sleeping UI nor request a CPU boost.
+    if (!ready || panelSleeping || sleepRequested) return;
+    int level = connected ? (displayedWifiLevel > 0 ? displayedWifiLevel : 1) : 0;
+    // RSSI() returns zero on failure; retain the last level until a valid sample.
+    if (connected && rssi < 0) {
+        if (displayedWifiLevel <= 0) level = rssi >= -60 ? 3 : rssi >= -75 ? 2 : 1;
+        else {
+            // Nominal boundaries -75/-60 dBm, with 3 dB hysteresis each way.
+            while (level < 3 && rssi >= (level == 1 ? -72 : -57)) ++level;
+            while (level > 1 && rssi < (level == 3 ? -63 : -78)) --level;
+        }
+    }
+    if (level == displayedWifiLevel) return;
+    displayedWifiLevel = level;
+    lv_obj_invalidate(wifi);
 }
 void updateDeviceSelector(bool pcSelected) {
     if (!ready) return;

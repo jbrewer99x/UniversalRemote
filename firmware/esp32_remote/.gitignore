@@ -8,3 +8,4 @@ deploy-firmware.ps1
 factory-backup.bin
 backup-hash.txt
 deploy.sh
+tests/

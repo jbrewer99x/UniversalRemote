@@ -845,12 +845,22 @@ void loop() {
     }
     serviceRemoteCommands();
     static bool displayedWifiConnected = false;
-    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
-    if (!screenSleeping && currentScreen == ScreenMode::Home &&
-        wifiConnected != displayedWifiConnected) {
-        updateWifiStatus(wifiConnected);
-        displayedWifiConnected = wifiConnected;
+    static bool wifiStatusWasVisible = false;
+    static uint32_t lastWifiStatusAt = 0;
+    const bool wifiStatusVisible = !screenSleeping && !isDisplaySleeping() &&
+                                   currentScreen == ScreenMode::Home;
+    if (wifiStatusVisible) {
+        const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+        const uint32_t statusNow = millis();
+        if (!wifiStatusWasVisible || wifiConnected != displayedWifiConnected ||
+            statusNow - lastWifiStatusAt >= 10000) {
+            updateWifiStatus(wifiConnected, wifiConnected ? WiFi.RSSI() : 0);
+            displayedWifiConnected = wifiConnected;
+            lastWifiStatusAt = statusNow;
+        }
     }
+    // No RSSI sampling or icon updates while hidden; refresh on the next visible loop.
+    wifiStatusWasVisible = wifiStatusVisible;
 
     RemoteTouchPoint point = readTouch();
     if (!screenSleeping) {
